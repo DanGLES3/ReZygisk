@@ -39,7 +39,7 @@ val CFlagsRelease = arrayOf(
   "-D_GNU_SOURCE", "-std=c99", "-Wpedantic", "-Wall", "-Wextra", "-Werror",
   "-Wformat", "-Wuninitialized", "-Wshadow", "-Wno-zero-length-array", 
   "-Wno-fixed-enum-extension", "-Iroot_impl", "-llog",
-  "-Wl,--strip-all", "-flto=thin", "-Ofast"
+  "-Wl,--strip-all", "-flto=thin", "-O3"
 )
 
 val CFlagsDebug = arrayOf(
