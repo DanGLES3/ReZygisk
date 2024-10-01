@@ -18,6 +18,10 @@
 
 #include "utils.h"
 
+/* INFO 50ms wait */
+// #define ALLOW_WAIT_ON_DEBUG() usleep(500 * 1000)
+#define ALLOW_WAIT_ON_DEBUG() {}
+
 bool switch_mount_namespace(pid_t pid) {
   char path[PATH_MAX];
   snprintf(path, sizeof(path), "/proc/%d/ns/mnt", pid);
@@ -263,6 +267,8 @@ int gread_fd(int fd) {
 
 #define write_func(type)                    \
   ssize_t write_## type(int fd, type val) { \
+    ALLOW_WAIT_ON_DEBUG();                  \
+                                            \
     return write(fd, &val, sizeof(type));   \
   }
 
@@ -286,6 +292,8 @@ read_func(uint8_t)
 ssize_t write_string(int fd, const char *restrict str) {
   size_t len[1];
   len[0] = strlen(str);
+
+  ALLOW_WAIT_ON_DEBUG();
 
   ssize_t written_bytes = write(fd, &len, sizeof(size_t));
   if (written_bytes != sizeof(size_t)) {

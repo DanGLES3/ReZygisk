@@ -12,24 +12,8 @@
 enum RootImplState apatch_get_existence(void) {
   struct stat s;
   if (stat("/data/adb/apd", &s) != 0) {
-    if (errno != ENOENT) {
-      LOGE("Failed to stat APatch apd binary: %s\n", strerror(errno));
-    }
+    if (errno != ENOENT) LOGE("Failed to stat APatch apd binary: %s\n", strerror(errno));
     errno = 0;
-
-    return Inexistent;
-  }
-
-  char *PATH = getenv("PATH");
-  if (PATH == NULL) {
-    LOGE("Failed to get PATH environment variable: %s\n", strerror(errno));
-    errno = 0;
-
-    return Inexistent;
-  }
-
-  if (strstr(PATH, "/data/adb/ap/bin") == NULL) {
-    LOGE("APatch's APD binary is not in PATH\n");
 
     return Inexistent;
   }
@@ -45,6 +29,8 @@ enum RootImplState apatch_get_existence(void) {
   }
 
   int version = atoi(apatch_version + strlen("apd "));
+
+  LOGI("Meow-- Version: %d\n", version);
 
   if (version == 0) return Abnormal;
   if (version >= MIN_APATCH_VERSION && version <= 999999) return Supported;

@@ -36,6 +36,10 @@ int chcon(const char *path, const char *restrict context);
 
 int unix_listener_from_path(char *path);
 
+// ssize_t send_fd(int sockfd, int fd);
+
+// int recv_fd(int sockfd);
+
 ssize_t gwrite_fd(int fd, int sendfd);
 
 int gread_fd(int fd);
