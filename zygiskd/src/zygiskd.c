@@ -784,6 +784,8 @@ void zygiskd_start(char *restrict argv[]) {
       }
     }
 
+    if (action != RequestCompanionSocket) close(client_fd);
+
     continue;
   }
 
