@@ -28,7 +28,7 @@ enum RootImplState magisk_get_existence(void) {
   char *argv[] = { "magisk", "-v", NULL };
 
   char magisk_info[32];
-  if (!exec_command(magisk_info, sizeof(magisk_info), "/sbin/magisk", argv)) {
+  if (!exec_command(magisk_info, sizeof(magisk_info), "/debug_ramdisk/magisk", argv)) {
     LOGE("Failed to execute magisk binary: %s\n", strerror(errno));
     errno = 0;
 
@@ -42,7 +42,7 @@ enum RootImplState magisk_get_existence(void) {
   argv[1] = "-V";
 
   char magisk_version[32];
-  if (!exec_command(magisk_version, sizeof(magisk_version), "/sbin/magisk", argv)) {
+  if (!exec_command(magisk_version, sizeof(magisk_version), "/debug_ramdisk/magisk", argv)) {
     LOGE("Failed to execute magisk binary: %s\n", strerror(errno));
     errno = 0;
 
@@ -60,7 +60,7 @@ bool magisk_uid_granted_root(uid_t uid) {
   char *const argv[] = { "magisk", "--sqlite", sqlite_cmd, NULL };
 
   char result[32];
-  if (!exec_command(result, sizeof(result), "/sbin/magisk", argv)) {
+  if (!exec_command(result, sizeof(result), "/debug_ramdisk/magisk", argv)) {
     LOGE("Failed to execute magisk binary: %s\n", strerror(errno));
     errno = 0;
 
@@ -130,7 +130,7 @@ bool magisk_uid_should_umount(uid_t uid) {
     char *const argv[] = { "magisk", "--sqlite", sqlite_cmd, NULL };
 
     char result[32];
-    if (!exec_command(result, sizeof(result), "/sbin/magisk", argv)) {
+    if (!exec_command(result, sizeof(result), "/debug_ramdisk/magisk", argv)) {
       LOGE("Failed to execute magisk binary: %s\n", strerror(errno));
       errno = 0;
 
@@ -150,7 +150,7 @@ bool magisk_uid_is_manager(uid_t uid) {
   char *const argv[] = { "magisk", "--sqlite", sqlite_cmd, NULL };
 
   char output[32];
-  if (!exec_command(output, sizeof(output), "/sbin/magisk", argv)) {
+  if (!exec_command(output, sizeof(output), "/debug_ramdisk/magisk", argv)) {
     LOGE("Failed to execute magisk binary: %s\n", strerror(errno));
     errno = 0;
 
