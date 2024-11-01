@@ -38,7 +38,7 @@ val CStandardFlags = arrayOf(
 )
 
 val CFlagsRelease = arrayOf(
-  "-Wl,--strip-all", "-flto=thin", "-Ofast"
+  "-Wl,--strip-all", "-flto=thin", "-O3"
 )
 
 val CFlagsDebug = arrayOf(
