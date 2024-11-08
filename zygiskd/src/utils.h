@@ -17,46 +17,46 @@
   __android_log_print(ANDROID_LOG_ERROR , lp_select("zygiskd32", "zygiskd64"), __VA_ARGS__); \
   printf(__VA_ARGS__);
 
-#define ASSURE_SIZE_WRITE(area_name, subarea_name, sent_size, expected_size)                                    \
-  if (sent_size != (ssize_t)(expected_size)) {                                                                             \
+#define ASSURE_SIZE_WRITE(area_name, subarea_name, sent_size, expected_size)                                     \
+  if (sent_size != (ssize_t)(expected_size)) {                                                                   \
     LOGE("Failed to sent " subarea_name " in " area_name ": Expected %zu, got %zd\n", expected_size, sent_size); \
-                                                                                                                \
-    return;                                                                                                     \
+                                                                                                                 \
+    return;                                                                                                      \
   }
 
-#define ASSURE_SIZE_READ(area_name, subarea_name, sent_size, expected_size)                                     \
-  if (sent_size != (ssize_t)(expected_size)) {                                                                             \
+#define ASSURE_SIZE_READ(area_name, subarea_name, sent_size, expected_size)                                      \
+  if (sent_size != (ssize_t)(expected_size)) {                                                                   \
     LOGE("Failed to read " subarea_name " in " area_name ": Expected %zu, got %zd\n", expected_size, sent_size); \
-                                                                                                                \
-    return;                                                                                                     \
+                                                                                                                 \
+    return;                                                                                                      \
   }
 
 #define ASSURE_SIZE_WRITE_BREAK(area_name, subarea_name, sent_size, expected_size)                               \
-  if (sent_size != (ssize_t)(expected_size)) {                                                                              \
+  if (sent_size != (ssize_t)(expected_size)) {                                                                   \
     LOGE("Failed to sent " subarea_name " in " area_name ": Expected %zu, got %zd\n", expected_size, sent_size); \
                                                                                                                  \
     break;                                                                                                       \
   }
 
 #define ASSURE_SIZE_READ_BREAK(area_name, subarea_name, sent_size, expected_size)                                \
-  if (sent_size != (ssize_t)(expected_size)) {                                                                              \
+  if (sent_size != (ssize_t)(expected_size)) {                                                                   \
     LOGE("Failed to read " subarea_name " in " area_name ": Expected %zu, got %zd\n", expected_size, sent_size); \
                                                                                                                  \
     break;                                                                                                       \
   }
 
-#define ASSURE_SIZE_WRITE_WR(area_name, subarea_name, sent_size, expected_size)                                 \
-  if (sent_size != (ssize_t)(expected_size)) {                                                                             \
+#define ASSURE_SIZE_WRITE_WR(area_name, subarea_name, sent_size, expected_size)                                  \
+  if (sent_size != (ssize_t)(expected_size)) {                                                                   \
     LOGE("Failed to sent " subarea_name " in " area_name ": Expected %zu, got %zd\n", expected_size, sent_size); \
-                                                                                                                \
-    return -1;                                                                                                  \
+                                                                                                                 \
+    return -1;                                                                                                   \
   }
 
-#define ASSURE_SIZE_READ_WR(area_name, subarea_name, sent_size, expected_size)                                  \
-  if (sent_size != (ssize_t)(expected_size)) {                                                                             \
+#define ASSURE_SIZE_READ_WR(area_name, subarea_name, sent_size, expected_size)                                   \
+  if (sent_size != (ssize_t)(expected_size)) {                                                                   \
     LOGE("Failed to read " subarea_name " in " area_name ": Expected %zu, got %zd\n", expected_size, sent_size); \
-                                                                                                                \
-    return -1;                                                                                                  \
+                                                                                                                 \
+    return -1;                                                                                                   \
   }
 
 #define write_func_def(type)               \

@@ -421,19 +421,27 @@ static bool ensure_daemon_created(bool is_64bit) {
   }
 }
 
-#define CHECK_DAEMON_EXIT(abi)                                               \
-  if (status##abi.supported && pid == status64.daemon_pid) {                 \
-    char status_str[64];                                                     \
-    parse_status(status, status_str, sizeof(status_str));                    \
-                                                                             \
-    LOGW("daemon" #abi "pid %d exited: %s", pid, status_str);                \
-    status##abi.daemon_running = false;                                      \
-                                                                             \
-    if (status##abi.daemon_error_info[0] == '\0')                            \
-      memcpy(status##abi.daemon_error_info, status_str, strlen(status_str)); \
-                                                                             \
-    updateStatus();                                                          \
-    continue;                                                                \
+#define CHECK_DAEMON_EXIT(abi)                                                   \
+  if (status##abi.supported && pid == status64.daemon_pid) {                     \
+    char status_str[64];                                                         \
+    parse_status(status, status_str, sizeof(status_str));                        \
+                                                                                 \
+    LOGW("daemon" #abi " pid %d exited: %s", pid, status_str);                   \
+    status##abi.daemon_running = false;                                          \
+                                                                                 \
+    if (!status##abi.daemon_error_info) {                                        \
+      status##abi.daemon_error_info = (char *)malloc(strlen(status_str) + 1);    \
+      if (status##abi.daemon_error_info) {                                       \
+        LOGE("malloc daemon" #abi " error info failed");                         \
+                                                                                 \
+        return;                                                                  \
+      }                                                                          \
+                                                                                 \
+      memcpy(status##abi.daemon_error_info, status_str, strlen(status_str) + 1); \
+    }                                                                            \
+                                                                                 \
+    updateStatus();                                                              \
+    continue;                                                                    \
   }
 
 #define PRE_INJECT(abi, is_64)                                                         \
@@ -664,7 +672,7 @@ static char post_section[1024];
     else if (status ## suffix.zygote_injected) strcat(status_text, "😋 injected, "); \
     else strcat(status_text, "❌ not injected, ");                                   \
                                                                                      \
-    strcat(status_text, " daemon" # suffix ": ");                                    \
+    strcat(status_text, "daemon" # suffix ": ");                                     \
     if (status ## suffix.daemon_running) {                                           \
       strcat(status_text, "😋 running ");                                            \
                                                                                      \
@@ -690,25 +698,25 @@ static void updateStatus() {
 
   switch (tracing_state) {
     case TRACING: {
-      strcat(status_text, "😋 tracing ");
+      strcat(status_text, "😋 tracing");
 
       break;
     }
     case STOPPING: [[fallthrough]];
     case STOPPED: {
-      strcat(status_text, "❌ stopped ");
+      strcat(status_text, "❌ stopped");
 
       break;
     }
     case EXITING: {
-      strcat(status_text, "❌ exited ");
+      strcat(status_text, "❌ exited");
 
       break;
     }
   }
 
   if (tracing_state != TRACING && monitor_stop_reason[0] != '\0') {
-    strcat(status_text, "(");
+    strcat(status_text, " (");
     strcat(status_text, monitor_stop_reason);
     strcat(status_text, ")");
   }
@@ -735,67 +743,26 @@ static bool prepare_environment() {
     return false;
   }
 
-  const char field_name[] = "description=";
+  bool after_description = false;
 
-  int pre_section_len = 0;
-  int post_section_len = 0;
+  char line[1024];
+  while (fgets(line, sizeof(line), orig_prop) != NULL) {
+    if (strncmp(line, "description=", strlen("description=")) == 0) {
+      strcat(pre_section, "description=");
+      strcat(post_section, line + strlen("description="));
+      after_description = true;
 
-  /* TODO: improve this code */
-  int i = 1;
-  while (1) {
-    int int_char = fgetc(orig_prop);
-    if (int_char == EOF) break;
-
-    pre_section[pre_section_len] = (char)int_char;
-    pre_section[pre_section_len + 1] = '\0';
-    pre_section_len++;
-
-    if ((char)int_char != field_name[0]) continue;
-
-    while (1) {
-      int int_char2 = fgetc(orig_prop);
-      if (int_char2 == EOF) break;
-
-      if ((char)int_char2 == field_name[i]) {
-        i++;
-
-        if (i == (int)(sizeof(field_name) - 1)) {
-          pre_section[pre_section_len] = (char)int_char2;
-          pre_section[pre_section_len + 1] = '\0';
-          pre_section_len++;
-      
-          while (1) {
-            int int_char3 = fgetc(orig_prop);
-            if (int_char3 == EOF) break;
-
-            post_section[post_section_len] = (char)int_char3;
-            post_section[post_section_len + 1] = '\0';
-            post_section_len++;
-
-            i++;
-          }
-
-          break;
-        } else {
-          pre_section[pre_section_len] = (char)int_char2;
-          pre_section[pre_section_len + 1] = '\0';
-          pre_section_len++;
-
-          continue;
-        }
-      } else {
-        pre_section[pre_section_len] = (char)int_char2;
-        pre_section[pre_section_len + 1] = '\0';
-        pre_section_len++;
-
-        i = 1;
-
-        break;
-      }
+      continue;
     }
+
+    if (after_description) strcat(post_section, line);
+    else strcat(pre_section, line);
   }
 
   fclose(orig_prop);
+
+  /* TODO: See if ZYGISK_ENABLED flag is already set,
+             if so, set a status saying to disable built-in Zygisk. */
 
   updateStatus();
 
