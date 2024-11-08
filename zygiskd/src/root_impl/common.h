@@ -23,7 +23,7 @@ struct root_impl {
   uint8_t variant;
 };
 
-#define LONGEST_ROOT_IMPL_NAME sizeof("Magisk Kitsune")
+#define LONGEST_ROOT_IMPL_NAME sizeof("Magisk Official")
 
 void root_impls_setup(void);
 

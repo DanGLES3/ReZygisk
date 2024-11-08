@@ -347,6 +347,9 @@ bool exec_command(char *restrict buf, size_t len, const char *restrict file, cha
   if ((pid = fork()) == -1) {
     LOGE("fork: %s\n", strerror(errno));
 
+    close(link[0]);
+    close(link[1]);
+
     return false;
   }
 
@@ -356,13 +359,20 @@ bool exec_command(char *restrict buf, size_t len, const char *restrict file, cha
     close(link[1]);
     
     execv(file, argv);
+
+    LOGE("execv failed: %s\n", strerror(errno));
+    _exit(1);
   } else {
     close(link[1]);
 
     int nbytes = read(link[0], buf, len);
-    buf[nbytes - 1] = '\0';
+    if (nbytes > 0) buf[nbytes - 1] = '\0';
+    /* INFO: If something went wrong, at least we must ensure it is NULL-terminated */
+    else buf[0] = '\0';
 
     wait(NULL);
+
+    close(link[0]);
   }
 
   return true;

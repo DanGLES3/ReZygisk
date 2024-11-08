@@ -140,12 +140,17 @@ bool apatch_uid_granted_root(uid_t uid) {
   }
 
   for (size_t i = 0; i < config.size; i++) {
-    if (config.configs[i].uid == uid) {
-      _apatch_free_package_config(&config);
+    if (config.configs[i].uid != uid) continue;
 
-      return config.configs[i].root_granted;
-    }
+    /* INFO: This allow us to copy the information to avoid use-after-free */
+    bool root_granted = config.configs[i].root_granted;
+
+    _apatch_free_package_config(&config);
+
+    return root_granted;
   }
+
+  _apatch_free_package_config(&config);
 
   return false;
 }
@@ -159,11 +164,14 @@ bool apatch_uid_should_umount(uid_t uid) {
   }
 
   for (size_t i = 0; i < config.size; i++) {
-    if (config.configs[i].uid == uid) {
-      _apatch_free_package_config(&config);
+    if (config.configs[i].uid != uid) continue;
 
-      return config.configs[i].umount_needed;
-    }
+    /* INFO: This allow us to copy the information to avoid use-after-free */
+    bool umount_needed = config.configs[i].umount_needed;
+
+    _apatch_free_package_config(&config);
+
+    return umount_needed;
   }
 
   _apatch_free_package_config(&config);

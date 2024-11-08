@@ -134,7 +134,8 @@ bool magisk_uid_should_umount(uid_t uid) {
     LOGE("Failed to execute pm binary: %s\n", strerror(errno));
     errno = 0;
 
-    return false; /* INFO: It's better if we do NOT umount than the opposite */
+    /* INFO: It's better if we do NOT umount than the opposite */
+    return false;
   }
 
   if (result[0] == '\0') {
@@ -150,7 +151,6 @@ bool magisk_uid_should_umount(uid_t uid) {
 
   char *const argv[] = { "magisk", "--sqlite", sqlite_cmd, NULL };
 
-  result[0] = '\0';
   if (!exec_command(result, sizeof(result), (const char *)path_to_magisk, argv)) {
     LOGE("Failed to execute magisk binary: %s\n", strerror(errno));
     errno = 0;
@@ -162,12 +162,9 @@ bool magisk_uid_should_umount(uid_t uid) {
 }
 
 bool magisk_uid_is_manager(uid_t uid) {
-  char sqlite_cmd[256];
-  snprintf(sqlite_cmd, sizeof(sqlite_cmd), "select value from strings where key=\"requester\" limit 1");
+  char *const argv[] = { "magisk", "--sqlite", "select value from strings where key=\"requester\" limit 1", NULL };
 
-  char *const argv[] = { "magisk", "--sqlite", sqlite_cmd, NULL };
-
-  char output[128] = { 0 };
+  char output[128];
   if (!exec_command(output, sizeof(output), (const char *)path_to_magisk, argv)) {
     LOGE("Failed to execute magisk binary: %s\n", strerror(errno));
     errno = 0;

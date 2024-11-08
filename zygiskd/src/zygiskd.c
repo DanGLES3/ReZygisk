@@ -391,9 +391,10 @@ void zygiskd_start(char *restrict argv[]) {
     char impl_name[LONGEST_ROOT_IMPL_NAME];
     stringify_root_impl_name(impl, impl_name);
 
-    struct MsgHead *msg = NULL;
-    msg = malloc(sizeof(struct MsgHead) + strlen("Root: , Modules: ") + strlen(impl_name) + module_list_len + 1);
-    msg->length = sprintf(msg->data, "Root: %s, Modules: %s", impl_name, module_list);
+    size_t msg_length = strlen("Root: , Modules: ") + strlen(impl_name) + module_list_len + 1;
+
+    struct MsgHead *msg = malloc(sizeof(struct MsgHead) + msg_length);
+    msg->length = snprintf(msg->data, msg_length, "Root: %s, Modules: %s", impl_name, module_list);
     msg->cmd = DAEMON_SET_INFO;
 
     unix_datagram_sendto(CONTROLLER_SOCKET, (void *)msg, sizeof(struct MsgHead) + msg->length);
@@ -611,10 +612,10 @@ void zygiskd_start(char *restrict argv[]) {
         struct Module *module = &context.modules[index];
 
         if (module->companion != -1) {
-          LOGI("  Polling companion for module \"%s\"\n", module->name);
+          LOGI(" - Polling companion for module \"%s\"\n", module->name);
 
           if (!check_unix_socket(module->companion, false)) {
-            LOGE("  Poll companion for module \"%s\" crashed\n", module->name);
+            LOGE(" - Poll companion for module \"%s\" crashed\n", module->name);
 
             close(module->companion);
             module->companion = -1;
@@ -625,12 +626,12 @@ void zygiskd_start(char *restrict argv[]) {
           module->companion = spawn_companion(argv, module->name, module->lib_fd);
 
           if (module->companion > 0) {
-            LOGI("  Spawned companion for \"%s\"\n", module->name);
+            LOGI(" - Spawned companion for \"%s\"\n", module->name);
           } else {
             if (module->companion == -2) {
-              LOGE("  No companion spawned for \"%s\" because it has no entry.\n", module->name);
+              LOGE(" - No companion spawned for \"%s\" because it has no entry.\n", module->name);
             } else {
-              LOGE("  Failed to spawn companion for \"%s\": %s\n", module->name, strerror(errno));
+              LOGE(" - Failed to spawn companion for \"%s\": %s\n", module->name, strerror(errno));
             }
           }
         }
@@ -642,10 +643,10 @@ void zygiskd_start(char *restrict argv[]) {
                  safe.
         */
         if (module->companion != -1) {
-          LOGI("  Sending companion fd socket of module \"%s\"\n", module->name);
+          LOGI(" - Sending companion fd socket of module \"%s\"\n", module->name);
 
           if (write_fd(module->companion, client_fd) == -1) {
-            LOGE("Failed to send companion fd socket of module \"%s\"\n", module->name);
+            LOGE(" - Failed to send companion fd socket of module \"%s\"\n", module->name);
 
             ret = write_uint8_t(client_fd, 0);
             ASSURE_SIZE_WRITE_BREAK("RequestCompanionSocket", "response", ret, sizeof(int));
@@ -663,8 +664,6 @@ void zygiskd_start(char *restrict argv[]) {
           /* INFO: RequestCompanionSocket by defailt doesn't close the client_fd */
           close(client_fd);
         }
-
-        LOGI("ZD++ RequestCompanionSocket\n");
 
         break;
       }

@@ -51,23 +51,26 @@ void *entry_thread(void *arg) {
 }
 
 /* WARNING: Dynamic memory based */
-void entry(int fd) {
+void companion_entry(int fd) {
   LOGI("New companion entry.\n - Client fd: %d\n", fd);
 
-  char name[256];
-  ssize_t ret = read_string(fd, name, sizeof(name));
-  if (ret == -1) {
+  /* TODO: Use non-NULL string termination */
+  char name[256 + 1];
+  ssize_t name_length = read_string(fd, name, sizeof(name) - 1);
+  if (name_length == -1) {
     LOGE("Failed to read module name\n");
 
-    ret = write_uint8_t(fd, 2);
+    ssize_t ret = write_uint8_t(fd, 2);
     ASSURE_SIZE_WRITE("ZygiskdCompanion", "name", ret, sizeof(uint8_t));
 
     exit(0);
   }
+  name[name_length] = '\0';
 
-  LOGI(" - Module name: `%.*s`\n", (int)ret, name);
+  LOGI(" - Module name: `%.*s`\n", (int)name_length, name);
 
   int library_fd = read_fd(fd);
+  ssize_t ret = 0;
   if (library_fd == -1) {
     LOGE("Failed to receive library fd\n");
 
@@ -83,7 +86,7 @@ void entry(int fd) {
   close(library_fd);
 
   if (module_entry == NULL) {
-    LOGI("No companion module entry for module: %.*s\n", (int)ret, name);
+    LOGI("No companion module entry for module: %.*s\n", (int)name_length, name);
 
     ret = write_uint8_t(fd, 0);
     ASSURE_SIZE_WRITE("ZygiskdCompanion", "module_entry", ret, sizeof(uint8_t));
@@ -120,7 +123,7 @@ void entry(int fd) {
     args->fd = client_fd;
     args->entry = module_entry;
 
-    LOGI("New companion request.\n - Module name: %.*s\n - Client fd: %d\n", (int)ret, name, args->fd);
+    LOGI("New companion request.\n - Module name: %.*s\n - Client fd: %d\n", (int)name_length, name, args->fd);
 
     ret = write_uint8_t(args->fd, 1);
     ASSURE_SIZE_WRITE("ZygiskdCompanion", "client_fd", ret, sizeof(uint8_t));
