@@ -14,59 +14,56 @@
 
 #include <android/log.h>
 
-#include "companion.h"
 #include "dl.h"
 #include "utils.h"
 
-typedef void (*zygisk_companion_entry_func)(int);
+typedef void (*zygisk_companion_entry)(int);
 
 struct companion_module_thread_args {
   int fd;
-  zygisk_companion_entry_func entry;
+  zygisk_companion_entry entry;
 };
 
-zygisk_companion_entry_func load_module(int fd) {
+zygisk_companion_entry load_module(int fd) {
   char path[PATH_MAX];
   snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
 
   void *handle = android_dlopen(path, RTLD_NOW);
   void *entry = dlsym(handle, "zygisk_companion_entry");
-  
-  return (zygisk_companion_entry_func)entry;
+
+  return (zygisk_companion_entry)entry;
 }
 
 void *entry_thread(void *arg) {
   struct companion_module_thread_args *args = (struct companion_module_thread_args *)arg;
 
   int fd = args->fd;
-  zygisk_companion_entry_func module_entry = args->entry;
+  zygisk_companion_entry module_entry = args->entry;
 
-  struct stat st0;
+  struct stat st0 = { 0 };
   if (fstat(fd, &st0) == -1) {
-    LOGE("Failed to get client fd stats\n");
+    LOGE("Failed to get initial client fd stats: %s\n", strerror(errno));
 
-    close(fd);
     free(args);
 
-    pthread_exit(NULL);
+    return NULL;
   }
 
   module_entry(fd);
 
+  /* INFO: Only attempt to close the client fd if it appears to be the same file
+             and if we can successfully stat it again. This prevents double closes
+             if the module companion already closed the fd.
+  */
   struct stat st1;
-  if (fstat(fd, &st1) == -1) {
-    LOGE("Failed to get client fd stats\n");
+  if (fstat(fd, &st1) == 0) {
+    if (st0.st_dev == st1.st_dev && st0.st_ino == st1.st_ino) {
+      LOGI("Client fd stats unchanged. Closing.\n");
 
-    close(fd);
-    free(args);
-
-    pthread_exit(NULL);
-  }
-
-  if (st0.st_dev != st1.st_dev || st0.st_ino != st1.st_ino) {
-    LOGI("Client fd changed. Closing.\n");
-
-    close(fd);
+      close(fd);
+    } else {
+      LOGI("Client fd stats changed, assuming module handled closing.\n");
+    }
   }
 
   free(args);
@@ -78,45 +75,44 @@ void *entry_thread(void *arg) {
 void companion_entry(int fd) {
   LOGI("New companion entry.\n - Client fd: %d\n", fd);
 
-  /* TODO: Use non-NULL string termination */
   char name[256 + 1];
-  ssize_t name_length = read_string(fd, name, sizeof(name) - 1);
-  if (name_length == -1) {
+  ssize_t ret = read_string(fd, name, sizeof(name));
+  if (ret == -1) {
     LOGE("Failed to read module name\n");
 
-    ssize_t ret = write_uint8_t(fd, 2);
-    ASSURE_SIZE_WRITE("ZygiskdCompanion", "name", ret, sizeof(uint8_t));
+    /* TODO: Is that appropriate? */
+    close(fd);
 
     exit(0);
   }
-  name[name_length] = '\0';
 
   LOGI(" - Module name: \"%s\"\n", name);
 
   int library_fd = read_fd(fd);
-  ssize_t ret = 0;
   if (library_fd == -1) {
     LOGE("Failed to receive library fd\n");
 
-    ret = write_uint8_t(fd, 2);
-    ASSURE_SIZE_WRITE("ZygiskdCompanion", "library_fd", ret, sizeof(uint8_t));
+    /* TODO: Is that appropriate? */
+    close(fd);
 
     exit(0);
   }
 
   LOGI(" - Library fd: %d\n", library_fd);
 
-  zygisk_companion_entry_func module_entry = load_module(library_fd);
+  zygisk_companion_entry module_entry = load_module(library_fd);
   close(library_fd);
 
   if (module_entry == NULL) {
-    LOGE("No companion module entry for module: %s\n", name);
+    LOGE(" - No companion module entry for module: %s\n", name);
 
     ret = write_uint8_t(fd, 0);
     ASSURE_SIZE_WRITE("ZygiskdCompanion", "module_entry", ret, sizeof(uint8_t));
 
     exit(0);
   } else {
+    LOGI(" - Module entry found\n");
+
     ret = write_uint8_t(fd, 1);
     ASSURE_SIZE_WRITE("ZygiskdCompanion", "module_entry", ret, sizeof(uint8_t));
   }
@@ -126,12 +122,10 @@ void companion_entry(int fd) {
       LOGE("Something went wrong in companion. Bye!\n");
 
       exit(0);
-
-      break;
     }
-  
+
     int client_fd = read_fd(fd);
-    if (fd == -1) {
+    if (client_fd == -1) {
       LOGE("Failed to receive client fd\n");
 
       exit(0);
@@ -149,12 +143,15 @@ void companion_entry(int fd) {
     args->fd = client_fd;
     args->entry = module_entry;
 
-    LOGI("New companion request.\n - Module name: %s\n - Client fd: %d\n", name, args->fd);
+    LOGI("New companion request.\n - Module name: %s\n - Client fd: %d\n", name, client_fd);
 
-    ret = write_uint8_t(args->fd, 1);
+    ret = write_uint8_t(client_fd, 1);
     ASSURE_SIZE_WRITE("ZygiskdCompanion", "client_fd", ret, sizeof(uint8_t));
-    
+
     pthread_t thread;
     pthread_create(&thread, NULL, entry_thread, args);
+    pthread_detach(thread);
+
+    LOGI(" - Spawned companion thread for client fd: %d\n", client_fd);
   }
 }

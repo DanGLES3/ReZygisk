@@ -282,18 +282,16 @@ write_func(uint8_t)
 read_func(uint8_t)
 
 ssize_t write_string(int fd, const char *restrict str) {
-  size_t len[1];
-  len[0] = strlen(str);
-
-  ssize_t written_bytes = write(fd, &len, sizeof(size_t));
+  size_t str_len = strlen(str);
+  ssize_t written_bytes = write(fd, &str_len, sizeof(size_t));
   if (written_bytes != sizeof(size_t)) {
     LOGE("Failed to write string length: Not all bytes were written (%zd != %zu).\n", written_bytes, sizeof(size_t));
 
     return -1;
   }
 
-  written_bytes = write(fd, str, len[0]);
-  if ((size_t)written_bytes != len[0]) {
+  written_bytes = write(fd, str, str_len);
+  if ((size_t)written_bytes != str_len) {
     LOGE("Failed to write string: Not all bytes were written.\n");
 
     return -1;
@@ -302,30 +300,29 @@ ssize_t write_string(int fd, const char *restrict str) {
   return written_bytes;
 }
 
-ssize_t read_string(int fd, char *restrict str, size_t len) {
-  size_t str_len_buf[1];
-
-  ssize_t read_bytes = read(fd, &str_len_buf, sizeof(size_t));
+ssize_t read_string(int fd, char *restrict buf, size_t buf_size) {
+  size_t str_len = 0;
+  ssize_t read_bytes = read(fd, &str_len, sizeof(size_t));
   if (read_bytes != (ssize_t)sizeof(size_t)) {
     LOGE("Failed to read string length: Not all bytes were read (%zd != %zu).\n", read_bytes, sizeof(size_t));
 
     return -1;
   }
   
-  size_t str_len = str_len_buf[0];
-
-  if (str_len > len) {
-    LOGE("Failed to read string: Buffer is too small (%zu > %zu).\n", str_len, len);
+  if (str_len > buf_size - 1) {
+    LOGE("Failed to read string: Buffer is too small (%zu > %zu - 1).\n", str_len, buf_size);
 
     return -1;
   }
 
-  read_bytes = read(fd, str, str_len);
+  read_bytes = read(fd, buf, str_len);
   if (read_bytes != (ssize_t)str_len) {
     LOGE("Failed to read string: Promised bytes doesn't exist (%zd != %zu).\n", read_bytes, str_len);
 
     return -1;
   }
+
+  if (str_len > 0) buf[str_len] = '\0';
 
   return read_bytes;
 }

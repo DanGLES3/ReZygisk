@@ -13,14 +13,13 @@
 #include <android/log.h>
 
 #include "companion.h"
-#include "dl.h"
 #include "utils.h"
 
 #define ANDROID_NAMESPACE_TYPE_SHARED 0x2
 #define ANDROID_DLEXT_USE_NAMESPACE 0x200
 
 typedef struct AndroidNamespace {
-  unsigned char _unused[0];
+  uint8_t _unused[0];
 } AndroidNamespace;
 
 typedef struct AndroidDlextinfo {
@@ -33,6 +32,8 @@ typedef struct AndroidDlextinfo {
   AndroidNamespace *library_namespace;
 } AndroidDlextinfo;
 
+extern void *android_dlopen_ext(const char *filename, int flags, const AndroidDlextinfo *extinfo);
+
 typedef AndroidNamespace *(*AndroidCreateNamespaceFn)(
   const char *name,
   const char *ld_library_path,
@@ -42,8 +43,6 @@ typedef AndroidNamespace *(*AndroidCreateNamespaceFn)(
   AndroidNamespace *parent,
   const void *caller_addr
 );
-
-extern void *android_dlopen_ext(const char *filename, int flags, const AndroidDlextinfo *extinfo);
 
 void *android_dlopen(char *path, int flags) {
   char *dir = dirname(path);

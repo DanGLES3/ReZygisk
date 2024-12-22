@@ -91,7 +91,7 @@ read_func_def(uint8_t);
 
 ssize_t write_string(int fd, const char *restrict str);
 
-ssize_t read_string(int fd, char *restrict str, size_t len);
+ssize_t read_string(int fd, char *restrict buf, size_t buf_size);
 
 bool exec_command(char *restrict buf, size_t len, const char *restrict file, char *const argv[]);
 

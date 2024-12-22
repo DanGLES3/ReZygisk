@@ -465,13 +465,15 @@ void zygiskd_start(char *restrict argv[]) {
 
         break;
       }
+      /* TODO: Move to another thread and save client fds to an epoll list
+                 so that we can, in a single-thread, deal with multiple logcats */
       case RequestLogcatFd: {
         uint8_t level = 0;
         ssize_t ret = read_uint8_t(client_fd, &level);
         ASSURE_SIZE_READ_BREAK("RequestLogcatFd", "level", ret, sizeof(level));
 
         char tag[128 + 1];
-        ret = read_string(client_fd, tag, sizeof(tag) - 1);
+        ret = read_string(client_fd, tag, sizeof(tag));
         if (ret == -1) {
           LOGE("Failed reading logcat tag.\n");
 
@@ -480,10 +482,7 @@ void zygiskd_start(char *restrict argv[]) {
           break;
         }
 
-        tag[ret] = '\0';
-
-        /* INFO: Non-NULL terminated */
-        char message[1024];
+        char message[1024 + 1];
         ret = read_string(client_fd, message, sizeof(message));
         if (ret == -1) {
           LOGE("Failed reading logcat message.\n");
@@ -493,7 +492,7 @@ void zygiskd_start(char *restrict argv[]) {
           break;
         }
 
-        __android_log_print(level, tag, "%.*s", (int)ret, message);
+        __android_log_print(level, tag, "%s", message);
 
         break;
       }
