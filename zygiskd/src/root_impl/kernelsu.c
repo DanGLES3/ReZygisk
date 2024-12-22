@@ -14,7 +14,7 @@
            so we need to cast it to signed int to
            avoid any potential UB.
 */
-#define KERNEL_SU_OPTION 0xdeadbeef
+#define KERNEL_SU_OPTION (int)0xdeadbeef
 
 #define CMD_GET_VERSION 2
 #define CMD_UID_GRANTED_ROOT 12
@@ -52,7 +52,7 @@ bool ksu_uid_granted_root(uid_t uid) {
   bool granted = false;
   prctl(KERNEL_SU_OPTION, CMD_UID_GRANTED_ROOT, uid, &granted, &result);
 
-  if (result != KERNEL_SU_OPTION) return false;
+  if ((int)result != KERNEL_SU_OPTION) return false;
 
   return granted;
 }
@@ -62,7 +62,7 @@ bool ksu_uid_should_umount(uid_t uid) {
   bool umount = false;
   prctl(KERNEL_SU_OPTION, CMD_UID_SHOULD_UMOUNT, uid, &umount, &result);
 
-  if (result != KERNEL_SU_OPTION) return false;
+  if ((int)result != KERNEL_SU_OPTION) return false;
 
   return umount;
 }

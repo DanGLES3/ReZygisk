@@ -25,15 +25,15 @@
 #define SYSTEM_SERVER_STARTED 10
 
 enum DaemonSocketAction {
-  PingHeartbeat,
-  RequestLogcatFd,
-  GetProcessFlags,
-  GetInfo,
-  ReadModules,
-  RequestCompanionSocket,
-  GetModuleDir,
-  ZygoteRestart,
-  SystemServerStarted
+  PingHeartbeat          = 0,
+  RequestLogcatFd        = 1,
+  GetProcessFlags        = 2,
+  GetInfo                = 3,
+  ReadModules            = 4,
+  RequestCompanionSocket = 5,
+  GetModuleDir           = 6,
+  ZygoteRestart          = 7,
+  SystemServerStarted    = 8
 };
 
 enum ProcessFlags: uint32_t {

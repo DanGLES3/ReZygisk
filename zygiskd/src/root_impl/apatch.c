@@ -115,7 +115,7 @@ bool _apatch_get_package_config(struct packages_config *restrict config) {
     char *uid_str = strtok(NULL, ",");
     if (uid_str == NULL) continue;
 
-    config->configs[config->size].uid = atoi(uid_str);
+    config->configs[config->size].uid = (uid_t)atoi(uid_str);
     config->configs[config->size].root_granted = strcmp(allow_str, "1") == 0;
     config->configs[config->size].umount_needed = strcmp(exclude_str, "1") == 0;
 

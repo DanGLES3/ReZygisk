@@ -29,7 +29,7 @@ val commitHash: String by rootProject.extra
 val CStandardFlags = arrayOf(
   "-D_GNU_SOURCE", "-std=c99", "-Wpedantic", "-Wall", "-Wextra", "-Werror",
   "-Wformat", "-Wuninitialized", "-Wshadow", "-Wno-zero-length-array", 
-  "-Wno-fixed-enum-extension", "-Iroot_impl", "-llog",
+  "-Wconversion", "-Wno-fixed-enum-extension", "-Iroot_impl", "-llog",
   "-DMIN_APATCH_VERSION=$minAPatchVersion",
   "-DMIN_KSU_VERSION=$minKsuVersion",
   "-DMAX_KSU_VERSION=$maxKsuVersion",

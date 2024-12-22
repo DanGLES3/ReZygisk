@@ -31,8 +31,7 @@ zygisk_companion_entry_func load_module(int fd) {
 
   void *handle = android_dlopen(path, RTLD_NOW);
   void *entry = dlsym(handle, "zygisk_companion_entry");
-  if (entry == NULL) return NULL;
-
+  
   return (zygisk_companion_entry_func)entry;
 }
 
@@ -42,12 +41,37 @@ void *entry_thread(void *arg) {
   int fd = args->fd;
   zygisk_companion_entry_func module_entry = args->entry;
 
+  struct stat st0;
+  if (fstat(fd, &st0) == -1) {
+    LOGE("Failed to get client fd stats\n");
+
+    close(fd);
+    free(args);
+
+    pthread_exit(NULL);
+  }
+
   module_entry(fd);
 
-  close(fd);
+  struct stat st1;
+  if (fstat(fd, &st1) == -1) {
+    LOGE("Failed to get client fd stats\n");
+
+    close(fd);
+    free(args);
+
+    pthread_exit(NULL);
+  }
+
+  if (st0.st_dev != st1.st_dev || st0.st_ino != st1.st_ino) {
+    LOGI("Client fd changed. Closing.\n");
+
+    close(fd);
+  }
+
   free(args);
 
-  pthread_exit(NULL);
+  return NULL;
 }
 
 /* WARNING: Dynamic memory based */
@@ -67,7 +91,7 @@ void companion_entry(int fd) {
   }
   name[name_length] = '\0';
 
-  LOGI(" - Module name: `%.*s`\n", (int)name_length, name);
+  LOGI(" - Module name: \"%s\"\n", name);
 
   int library_fd = read_fd(fd);
   ssize_t ret = 0;
@@ -86,7 +110,7 @@ void companion_entry(int fd) {
   close(library_fd);
 
   if (module_entry == NULL) {
-    LOGI("No companion module entry for module: %.*s\n", (int)name_length, name);
+    LOGE("No companion module entry for module: %s\n", name);
 
     ret = write_uint8_t(fd, 0);
     ASSURE_SIZE_WRITE("ZygiskdCompanion", "module_entry", ret, sizeof(uint8_t));
@@ -99,7 +123,7 @@ void companion_entry(int fd) {
 
   while (1) {
     if (!check_unix_socket(fd, true)) {
-      LOGI("Something went wrong in companion. Bye!\n");
+      LOGE("Something went wrong in companion. Bye!\n");
 
       exit(0);
 
@@ -117,13 +141,15 @@ void companion_entry(int fd) {
     if (args == NULL) {
       LOGE("Failed to allocate memory for thread args\n");
 
+      close(client_fd);
+
       exit(0);
     }
 
     args->fd = client_fd;
     args->entry = module_entry;
 
-    LOGI("New companion request.\n - Module name: %.*s\n - Client fd: %d\n", (int)name_length, name, args->fd);
+    LOGI("New companion request.\n - Module name: %s\n - Client fd: %d\n", name, args->fd);
 
     ret = write_uint8_t(args->fd, 1);
     ASSURE_SIZE_WRITE("ZygiskdCompanion", "client_fd", ret, sizeof(uint8_t));

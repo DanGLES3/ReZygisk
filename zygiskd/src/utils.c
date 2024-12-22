@@ -272,9 +272,6 @@ int read_fd(int fd) {
     return read(fd, val, sizeof(type));     \
   }
 
-write_func(int)
-read_func(int)
-
 write_func(size_t)
 read_func(size_t)
 
@@ -365,7 +362,7 @@ bool exec_command(char *restrict buf, size_t len, const char *restrict file, cha
   } else {
     close(link[1]);
 
-    int nbytes = read(link[0], buf, len);
+    ssize_t nbytes = read(link[0], buf, len);
     if (nbytes > 0) buf[nbytes - 1] = '\0';
     /* INFO: If something went wrong, at least we must ensure it is NULL-terminated */
     else buf[0] = '\0';
