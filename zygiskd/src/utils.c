@@ -228,11 +228,11 @@ ssize_t write_fd(int fd, int sendfd) {
 
 int read_fd(int fd) {
   char cmsgbuf[CMSG_SPACE(sizeof(int))];
-  char buf[1] = { 0 };
-  
+
+  int cnt = 1;
   struct iovec iov = {
-    .iov_base = buf,
-    .iov_len = 1
+    .iov_base = &cnt,
+    .iov_len = sizeof(cnt)
   };
 
   struct msghdr msg = {
@@ -242,7 +242,7 @@ int read_fd(int fd) {
     .msg_controllen = sizeof(cmsgbuf)
   };
 
-  ssize_t ret = recvmsg(fd, &msg, 0);
+  ssize_t ret = recvmsg(fd, &msg, MSG_WAITALL);
   if (ret == -1) {
     LOGE("recvmsg: %s\n", strerror(errno));
 

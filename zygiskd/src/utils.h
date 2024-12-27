@@ -9,12 +9,18 @@
 #define CONCAT_(x,y) x##y
 #define CONCAT(x,y) CONCAT_(x,y)
 
-#define LOGI(...)                                                                           \
-  __android_log_print(ANDROID_LOG_INFO, lp_select("zygiskd32", "zygiskd64"), __VA_ARGS__);  \
+#define LOG_TAG lp_select("zygiskd32", "zygiskd64")
+
+#define LOGI(...)                                              \
+  __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__); \
   printf(__VA_ARGS__);
 
-#define LOGE(...)                                                                            \
-  __android_log_print(ANDROID_LOG_ERROR , lp_select("zygiskd32", "zygiskd64"), __VA_ARGS__); \
+#define LOGW(...)                                                \
+  __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__);   \
+  printf(__VA_ARGS__);
+
+#define LOGE(...)                                                \
+  __android_log_print(ANDROID_LOG_ERROR , LOG_TAG, __VA_ARGS__); \
   printf(__VA_ARGS__);
 
 #define ASSURE_SIZE_WRITE(area_name, subarea_name, sent_size, expected_size)                                     \
