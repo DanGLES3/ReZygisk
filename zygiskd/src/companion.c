@@ -7,6 +7,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 
 #include <unistd.h>
 #include <linux/limits.h>
@@ -16,6 +17,9 @@
 
 #include "dl.h"
 #include "utils.h"
+
+#undef LOG_TAG
+#define LOG_TAG lp_select("zygiskd-companion32", "zygiskd-companion64")
 
 typedef void (*zygisk_companion_entry)(int);
 
@@ -28,12 +32,23 @@ zygisk_companion_entry load_module(int fd) {
   char path[PATH_MAX];
   snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
 
-  void *handle = android_dlopen(path, RTLD_NOW);
+  void *handle = dlopen_ext(path, RTLD_NOW);
+
+  if (!handle) return NULL;
+
   void *entry = dlsym(handle, "zygisk_companion_entry");
+  if (!entry) {
+    LOGE("Failed to dlsym zygisk_companion_entry: %s\n", dlerror());
+
+    dlclose(handle);
+
+    return NULL;
+  }
 
   return (zygisk_companion_entry)entry;
 }
 
+/* WARNING: Dynamic memory based */
 void *entry_thread(void *arg) {
   struct companion_module_thread_args *args = (struct companion_module_thread_args *)arg;
 
@@ -42,7 +57,7 @@ void *entry_thread(void *arg) {
 
   struct stat st0 = { 0 };
   if (fstat(fd, &st0) == -1) {
-    LOGE("Failed to get initial client fd stats: %s\n", strerror(errno));
+    LOGE(" - Failed to get initial client fd stats: %s\n", strerror(errno));
 
     free(args);
 
@@ -56,14 +71,10 @@ void *entry_thread(void *arg) {
              if the module companion already closed the fd.
   */
   struct stat st1;
-  if (fstat(fd, &st1) == 0) {
-    if (st0.st_dev == st1.st_dev && st0.st_ino == st1.st_ino) {
-      LOGI("Client fd stats unchanged. Closing.\n");
+  if (fstat(fd, &st1) != -1 || st0.st_ino == st1.st_ino) {
+    LOGI(" - Client fd changed after module entry\n");
 
-      close(fd);
-    } else {
-      LOGI("Client fd stats changed, assuming module handled closing.\n");
-    }
+    close(fd);
   }
 
   free(args);
@@ -80,10 +91,7 @@ void companion_entry(int fd) {
   if (ret == -1) {
     LOGE("Failed to read module name\n");
 
-    /* TODO: Is that appropriate? */
-    close(fd);
-
-    exit(0);
+    goto cleanup;
   }
 
   LOGI(" - Module name: \"%s\"\n", name);
@@ -92,10 +100,7 @@ void companion_entry(int fd) {
   if (library_fd == -1) {
     LOGE("Failed to receive library fd\n");
 
-    /* TODO: Is that appropriate? */
-    close(fd);
-
-    exit(0);
+    goto cleanup;
   }
 
   LOGI(" - Library fd: %d\n", library_fd);
@@ -109,7 +114,7 @@ void companion_entry(int fd) {
     ret = write_uint8_t(fd, 0);
     ASSURE_SIZE_WRITE("ZygiskdCompanion", "module_entry", ret, sizeof(uint8_t));
 
-    exit(0);
+    goto cleanup;
   } else {
     LOGI(" - Module entry found\n");
 
@@ -117,18 +122,25 @@ void companion_entry(int fd) {
     ASSURE_SIZE_WRITE("ZygiskdCompanion", "module_entry", ret, sizeof(uint8_t));
   }
 
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+
+  sigemptyset(&sa.sa_mask);
+  sa.sa_handler = SIG_IGN;
+  sigaction(SIGPIPE, &sa, NULL);
+
   while (1) {
     if (!check_unix_socket(fd, true)) {
       LOGE("Something went wrong in companion. Bye!\n");
 
-      exit(0);
+      break;
     }
 
     int client_fd = read_fd(fd);
     if (client_fd == -1) {
       LOGE("Failed to receive client fd\n");
 
-      exit(0);
+      break;
     }
 
     struct companion_module_thread_args *args = malloc(sizeof(struct companion_module_thread_args));
@@ -137,7 +149,7 @@ void companion_entry(int fd) {
 
       close(client_fd);
 
-      exit(0);
+      break;
     }
 
     args->fd = client_fd;
@@ -149,9 +161,20 @@ void companion_entry(int fd) {
     ASSURE_SIZE_WRITE("ZygiskdCompanion", "client_fd", ret, sizeof(uint8_t));
 
     pthread_t thread;
-    pthread_create(&thread, NULL, entry_thread, args);
-    pthread_detach(thread);
+    if (pthread_create(&thread, NULL, entry_thread, (void *)args) == 0)
+      continue;
 
-    LOGI(" - Spawned companion thread for client fd: %d\n", client_fd);
+    LOGE(" - Failed to create thread for companion module\n");
+
+    close(client_fd);
+    free(args);
+
+    break;
   }
+
+  cleanup:
+    close(fd);
+    LOGE("Companion thread exited\n");
+
+    exit(0);
 }
