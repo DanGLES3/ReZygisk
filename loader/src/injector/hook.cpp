@@ -123,6 +123,7 @@ vector<tuple<dev_t, ino_t, const char *, void **>> *plt_hook_list;
 map<string, vector<JNINativeMethod>, StringCmp> *jni_hook_list;
 bool should_unmap_zygisk = false;
 std::vector<lsplt::MapInfo> cached_map_infos = {};
+std::vector<std::string> cached_mountinfo = {};
 
 } // namespace
 
@@ -145,15 +146,8 @@ DCL_HOOK_FUNC(int, unshare, int flags) {
         // This is reproducible on the official AVD running API 26 and 27.
         // Simply avoid doing any unmounts for SysUI to avoid potential issues.
         (g_ctx->info_flags & PROCESS_IS_SYS_UI) == 0) {
-        if (g_ctx->flags[DO_REVERT_UNMOUNT]) {
-            if (g_ctx->info_flags & PROCESS_ROOT_IS_KSU) {
-                revert_unmount_ksu();
-            } else if (g_ctx->info_flags & PROCESS_ROOT_IS_APATCH){
-                revert_unmount_apatch();
-            } else if (g_ctx->info_flags & PROCESS_ROOT_IS_MAGISK) {
-                revert_unmount_magisk();
-            }
-        }
+        if (g_ctx->flags[DO_REVERT_UNMOUNT] && !cached_map_infos.empty())
+            do_umount(cached_mountinfo);
 
         /* Zygisksu changed: No umount app_process */
 
@@ -188,12 +182,16 @@ DCL_HOOK_FUNC(int, pthread_attr_setstacksize, void *target, size_t size) {
 
     if (should_unmap_zygisk) {
         unhook_functions();
+
         cached_map_infos.clear();
+        cached_mountinfo.clear();
+
         if (should_unmap_zygisk) {
             // Because both `pthread_attr_setstacksize` and `dlclose` have the same function signature,
             // we can use `musttail` to let the compiler reuse our stack frame and thus
             // `dlclose` will directly return to the caller of `pthread_attr_setstacksize`.
-            LOGI("unmap libzygisk.so loaded at %p with size %zu", start_addr, block_size);
+            LOGD("unmap libzygisk.so loaded at %p with size %zu", start_addr, block_size);
+
             [[clang::musttail]] return munmap(start_addr, block_size);
         }
     }
@@ -591,7 +589,7 @@ void ZygiskContext::run_modules_post() {
 
     if (modules.size() > 0) {
         LOGD("modules unloaded: %zu/%zu", modules_unloaded, modules.size());
-        clean_trace("jit-cache-zygisk", modules.size(), modules_unloaded, true);
+        clean_trace("jit-cache-zygisk", modules.size(), modules_unloaded);
     }
 }
 
@@ -605,7 +603,7 @@ void ZygiskContext::app_specialize_pre() {
     }
 
     if ((info_flags & (PROCESS_IS_MANAGER | PROCESS_ROOT_IS_MAGISK)) == (PROCESS_IS_MANAGER | PROCESS_ROOT_IS_MAGISK)) {
-        LOGI("Manager process detected. Notifying that Zygisk has been enabled.");
+        LOGD("Manager process detected. Notifying that Zygisk has been enabled.");
 
         setenv("ZYGISK_ENABLED", "1", 1);
     } else {
@@ -733,6 +731,7 @@ static bool hook_commit(std::vector<lsplt::MapInfo> &map_infos = cached_map_info
         return true;
     } else {
         LOGE("plt_hook failed");
+
         return false;
     }
 }
@@ -788,9 +787,6 @@ void hook_functions() {
 
     ino_t android_runtime_inode = 0;
     dev_t android_runtime_dev = 0;
-    /* TODO by ThePedroo: Implement injection via native bridge */
-    // ino_t native_bridge_inode = 0;
-    // dev_t native_bridge_dev = 0;
 
     cached_map_infos = lsplt::MapInfo::Scan();
     for (auto &map : cached_map_infos) {
@@ -799,6 +795,19 @@ void hook_functions() {
             android_runtime_dev = map.dev;
 
             break;
+        }
+    }
+
+    uint32_t flags = zygiskd::GetProcessFlags(getpid());
+    if (flags & PROCESS_ON_DENYLIST) {
+        LOGD("Process is on denylist, reverting unmounts");
+
+        if (flags & PROCESS_ROOT_IS_KSU) {
+            cached_mountinfo = fill_ksu_umount_paths();
+        } else if (flags & PROCESS_ROOT_IS_APATCH){
+            cached_mountinfo = fill_apatch_umount_paths();
+        } else if (flags & PROCESS_ROOT_IS_MAGISK) {
+            cached_mountinfo = fill_magisk_umount_paths();
         }
     }
 
@@ -823,16 +832,19 @@ static void hook_unloader() {
         if (map.path.ends_with("/libart.so")) {
             art_inode = map.inode;
             art_dev = map.dev;
+
             break;
         }
     }
 
     if (art_dev == 0 || art_inode == 0) {
         LOGE("virtual map for libart.so is not cached");
+
         return;
     } else {
         LOGD("hook_unloader called with libart.so [%zu:%lu]", art_dev, art_inode);
     }
+
     PLT_HOOK_REGISTER(art_dev, art_inode, pthread_attr_setstacksize);
     hook_commit();
 }
@@ -844,7 +856,9 @@ static void unhook_functions() {
             LOGE("Failed to register plt_hook [%s]", sym);
         }
     }
+
     delete plt_hook_list;
+
     if (!hook_commit()) {
         LOGE("Failed to restore plt_hook");
         should_unmap_zygisk = false;

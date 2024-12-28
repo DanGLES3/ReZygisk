@@ -1,5 +1,6 @@
 #include <mntent.h>
 #include <sys/mount.h>
+#include <sys/stat.h>
 
 #include "files.hpp"
 #include "logging.h"
@@ -25,14 +26,21 @@ namespace {
     }
 }
 
-void revert_unmount_ksu() {
+void do_umount(std::vector<std::string> targets) {
+    for (auto& target: targets) {
+        lazy_unmount(target.c_str());
+    }
+}
+
+std::vector<std::string> fill_ksu_umount_paths() {
     std::string ksu_loop;
     std::vector<std::string> targets;
 
     // Unmount ksu module dir last
     targets.emplace_back(MODULE_DIR);
 
-    for (auto& info: parse_mount_info("self")) {
+    std::vector<mount_info> mounts = parse_mount_info("self");
+    for (auto &info : mounts) {
         if (info.target == MODULE_DIR) {
             ksu_loop = info.source;
             continue;
@@ -61,25 +69,22 @@ void revert_unmount_ksu() {
         }
     }
 
-    for (auto& info: parse_mount_info("self")) {
+    for (auto &info : mounts) {
         // Unmount everything from ksu loop except ksu module dir
         if (info.source == ksu_loop && info.target != MODULE_DIR) {
             targets.emplace_back(info.target);
         }
     }
 
-    // Do unmount
-    for (auto& s: reversed(targets)) {
-        lazy_unmount(s.data());
-    }
+    return targets;
 }
 
-void revert_unmount_magisk() {
+std::vector<std::string> fill_magisk_umount_paths() {
     std::vector<std::string> targets;
 
     // Unmount dummy skeletons and MAGISKTMP
     // since mirror nodes are always mounted under skeleton, we don't have to specifically unmount
-    for (auto& info: parse_mount_info("self")) {
+    for (auto &info : parse_mount_info("self")) {
         if (info.source == "magisk" || info.source == "worker" || // magisktmp tmpfs
             info.root.starts_with("/adb/modules")) { // bind mount from data partition
             targets.push_back(info.target);
@@ -90,19 +95,18 @@ void revert_unmount_magisk() {
         }
     }
 
-    for (auto& s: reversed(targets)) {
-        lazy_unmount(s.data());
-    }
+    return targets;
 }
 
-void revert_unmount_apatch() {
+std::vector<std::string> fill_apatch_umount_paths() {
     std::string ap_loop;
     std::vector<std::string> targets;
 
     // Unmount ksu module dir last
     targets.emplace_back(MODULE_DIR);
 
-    for (auto& info: parse_mount_info("self")) {
+    std::vector<mount_info> mounts = parse_mount_info("self");
+    for (auto &info : mounts) {
         if (info.target == MODULE_DIR) {
             ap_loop = info.source;
             continue;
@@ -131,15 +135,12 @@ void revert_unmount_apatch() {
         }
     }
 
-    for (auto& info: parse_mount_info("self")) {
+    for (auto &info : mounts) {
         // Unmount everything from ksu loop except ksu module dir
         if (info.source == ap_loop && info.target != MODULE_DIR) {
             targets.emplace_back(info.target);
         }
     }
 
-    // Do unmount
-    for (auto& s: reversed(targets)) {
-        lazy_unmount(s.data());
-    }
+    return targets;
 }
