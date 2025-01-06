@@ -191,7 +191,7 @@ int unix_listener_from_path(char *restrict path) {
     return -1;
   }
 
-  if (chcon(path, "u:object_r:magisk_file:s0") == -1) {
+  if (chcon(path, "u:object_r:zygisk_file:s0") == -1) {
     LOGE("chcon: %s\n", strerror(errno));
 
     return -1;
@@ -626,41 +626,63 @@ enum mns_umount_state unmount_root(bool modules_only, struct root_impl impl) {
       char source_name[LONGEST_ROOT_IMPL_NAME];
       if (impl.impl == KernelSU) strcpy(source_name, "KSU");
       else strcpy(source_name, "APatch");
+      
+      const char **targets_to_unmount = NULL;
+      size_t num_targets = 0;
 
-      for (size_t i = mounts.length - 1; i > 0; i--) {
+      for (size_t i = 0; i < mounts.length; i++) {
         struct mountinfo mount = mounts.mounts[i];
 
-        if (
-          (
-            modules_only && 
-            (
-              strncmp(mount.target, "/debug_ramdisk", strlen("/debug_ramdisk")) == 0
-            )
-          ) ||
-          (
-            strcmp(mount.source, source_name) == 0 ||
-            strncmp(mount.root, "/adb/modules", strlen("/adb/modules")) == 0 || 
-            strncmp(mount.target, "/data/adb/modules", strlen("/data/adb/modules")) == 0
-          )
-        ) {
-          if (umount2(mount.target, MNT_DETACH) == -1) {
-            LOGE("[Magisk] Failed to unmount %s: %s\n", mount.target, strerror(errno));
+        bool should_unmount = false;
 
-            continue;
-          }
+        if (modules_only) {
+          if (strncmp(mount.target, "/debug_ramdisk", strlen("/debug_ramdisk")) == 0)
+            should_unmount = true;
+        } else {
+          if (strcmp(mount.source, source_name) == 0) should_unmount = true;
+          if (strncmp(mount.root, "/adb/modules", strlen("/adb/modules")) == 0) should_unmount = true;
+          if (strncmp(mount.target, "/data/adb/modules", strlen("/data/adb/modules")) == 0) should_unmount = true;
+        }
 
-          LOGI("[%s] Unmounted %s (%s | %s)\n", source_name, mount.target, mount.root, mount.source);
+        if (!should_unmount) continue;
+
+        num_targets++;
+        targets_to_unmount = realloc(targets_to_unmount, num_targets * sizeof(char*));
+        if (targets_to_unmount == NULL) {
+          LOGE("[%s] Failed to allocate memory for targets_to_unmount\n", source_name);
+
+          free(targets_to_unmount);
+          free_mounts(&mounts);
+
+          return Error;
+        }
+
+        targets_to_unmount[num_targets - 1] = mount.target;
+      }
+
+      for (size_t i = num_targets; i > 0; i--) {
+        const char *target = targets_to_unmount[i - 1];
+
+        if (umount2(target, MNT_DETACH) == -1) {
+          LOGE("[%s] Failed to unmount %s: %s\n", source_name, target, strerror(errno));
+        } else {
+          LOGI("[%s] Unmounted %s\n", source_name, target);
         }
       }
+      free(targets_to_unmount);
 
       break;
     }
     case Magisk: {
       LOGI("[Magisk] Unmounting root %s modules\n", modules_only ? "only" : "with");
+      
+      const char **targets_to_unmount = NULL;
+      size_t num_targets = 0;
 
-      for (size_t i = mounts.length - 1; i > 0; i--) {
+      for (size_t i = 0; i < mounts.length; i++) {
         struct mountinfo mount = mounts.mounts[i];
 
+        bool should_unmount = false;
         if (
           (
             modules_only && 
@@ -681,20 +703,39 @@ enum mns_umount_state unmount_root(bool modules_only, struct root_impl impl) {
             )
           )
         ) {
-          if (impl.impl == Magisk && strncmp(mount.target, "/system/bin", strlen("/system/bin")) == 0)
-            magiskSU_umounted = true;
+          should_unmount = true;
+        }
 
-          if (umount2(mount.target, MNT_DETACH) == -1) {
-            LOGE("[Magisk] Failed to unmount %s: %s\n", mount.target, strerror(errno));
+        if (!should_unmount) continue;
 
-            continue;
-          }
+        num_targets++;
+        targets_to_unmount = realloc(targets_to_unmount, num_targets * sizeof(char*));
+        if (targets_to_unmount == NULL) {
+          LOGE("[Magisk] Failed to allocate memory for targets_to_unmount\n");
 
-          LOGI("[Magisk] Unmounted %s\n", mount.target);
+          free(targets_to_unmount);
+          free_mounts(&mounts);
+
+          return Error;
+        }
+
+        targets_to_unmount[num_targets - 1] = mount.target;
+
+        if (impl.impl == Magisk && strncmp(mount.target, "/system/bin", strlen("/system/bin")) == 0)
+          magiskSU_umounted = true;
+      }
+
+      for (size_t i = num_targets; i > 0; i--) {
+        const char *target = targets_to_unmount[i - 1];
+        if (umount2(target, MNT_DETACH) == -1) {
+          LOGE("[Magisk] Failed to unmount %s: %s\n", target, strerror(errno));
         } else {
-          LOGI("[Magisk] Skipped unmounting %s (%s | %s)\n", mount.target, mount.root, mount.source);
+          LOGI("[Magisk] Unmounted %s\n", target);
         }
       }
+      free(targets_to_unmount);
+
+      break;
     }
   }
 
@@ -704,12 +745,6 @@ enum mns_umount_state unmount_root(bool modules_only, struct root_impl impl) {
 }
 
 int save_mns_fd(int pid, enum MountNamespaceState mns_state, struct root_impl impl) {
-  LOGI(" - Saving mount namespace fd for pid %d. State: %d\n", pid, mns_state);
-
-  LOGI(" - Clean namespace fd: %d\n", clean_namespace_fd);
-  LOGI(" - Rooted namespace fd: %d\n", rooted_namespace_fd);
-  LOGI(" - Module namespace fd: %d\n", module_namespace_fd);
-
   if (mns_state == Clean && clean_namespace_fd != 0) return clean_namespace_fd;
   if (mns_state == Rooted && rooted_namespace_fd != 0) return rooted_namespace_fd;
   if (mns_state == Module && module_namespace_fd != 0) return module_namespace_fd;
@@ -787,8 +822,6 @@ int save_mns_fd(int pid, enum MountNamespaceState mns_state, struct root_impl im
 
       return -1;
     }
-
-    LOGI(" - Forked child exited\n");
 
     if (mns_state == Rooted) return (rooted_namespace_fd = ns_fd);
     else if (mns_state == Clean && umount_state == Complete) return (clean_namespace_fd = ns_fd);

@@ -19,10 +19,6 @@ void entry(void* addr, size_t size, const char* path) {
         return;
     }
 
-#ifdef NDEBUG
-    logging::setfd(zygiskd::RequestLogcatFd());
-#endif
-
     LOGD("start plt hooking");
     hook_functions();
     clean_trace(path, 1, 0, false);

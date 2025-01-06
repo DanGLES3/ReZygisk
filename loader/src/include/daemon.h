@@ -78,7 +78,6 @@ namespace zygiskd {
 
     enum class SocketAction {
         PingHeartBeat,
-        RequestLogcatFd,
         GetProcessFlags,
         GetInfo,
         ReadModules,
@@ -94,8 +93,6 @@ namespace zygiskd {
     std::string GetTmpPath();
 
     bool PingHeartbeat();
-
-    int RequestLogcatFd();
 
     std::vector<ModuleInfo> ReadModules();
 

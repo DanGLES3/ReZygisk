@@ -175,8 +175,10 @@ DCL_HOOK_FUNC(int, unshare, int flags) {
         // This is reproducible on the official AVD running API 26 and 27.
         // Simply avoid doing any unmounts for SysUI to avoid potential issues.
         !g_ctx->flags[SERVER_FORK_AND_SPECIALIZE] && !(g_ctx->info_flags & PROCESS_IS_FIRST_STARTED)) {
-        if (g_ctx->flags[DO_REVERT_UNMOUNT]) {
-            update_mnt_ns(Clean, false);
+        if (g_ctx->info_flags & (PROCESS_IS_MANAGER | PROCESS_GRANTED_ROOT)) {
+            update_mnt_ns(Rooted, false);
+        } else if (!(g_ctx->flags[DO_REVERT_UNMOUNT])) {
+            update_mnt_ns(Module, false);
         }
 
         old_unshare(CLONE_NEWNS);
@@ -186,18 +188,6 @@ DCL_HOOK_FUNC(int, unshare, int flags) {
     errno = 0;
 
     return res;
-}
-
-// Close logd_fd if necessary to prevent crashing
-// For more info, check comments in zygisk_log_write
-DCL_HOOK_FUNC(void, android_log_close) {
-    if (g_ctx == nullptr) {
-        // Happens during un-managed fork like nativeForkApp, nativeForkUsap
-        logging::setfd(-1);
-    } else if (!g_ctx->flags[SKIP_FD_SANITIZATION]) {
-        logging::setfd(-1);
-    }
-    old_android_log_close();
 }
 
 // We cannot directly call `dlclose` to unload ourselves, otherwise when `dlclose` returns,
@@ -628,6 +618,10 @@ void ZygiskContext::app_specialize_pre() {
     flags[APP_SPECIALIZE] = true;
 
     info_flags = zygiskd::GetProcessFlags(g_ctx->args.app->uid);
+     if (info_flags & PROCESS_IS_FIRST_STARTED) {
+        update_mnt_ns(Clean, true);
+    }
+
     if ((info_flags & PROCESS_ON_DENYLIST) == PROCESS_ON_DENYLIST) {
         flags[DO_REVERT_UNMOUNT] = true;
     }
@@ -648,7 +642,6 @@ void ZygiskContext::app_specialize_post() {
     // Cleanups
     env->ReleaseStringUTFChars(args.app->nice_name, process);
     g_ctx = nullptr;
-    logging::setfd(-1);
 }
 
 bool ZygiskContext::exempt_fd(int fd) {
@@ -681,11 +674,10 @@ void ZygiskContext::nativeForkSystemServer_pre() {
     flags[SERVER_FORK_AND_SPECIALIZE] = true;
 
     fork_pre();
-    if (pid != 0)
-        return;
-
-    run_modules_pre();
-    zygiskd::SystemServerStarted();
+    if (is_child()) {
+        run_modules_pre();
+        zygiskd::SystemServerStarted();
+    }
 
     sanitize_fds();
 }
@@ -703,10 +695,7 @@ void ZygiskContext::nativeForkAndSpecialize_pre() {
     LOGV("pre forkAndSpecialize [%s]", process);
     flags[APP_FORK_AND_SPECIALIZE] = true;
 
-    /* Zygisksu changed: No args.app->fds_to_ignore check since we are Android 10+ */
-    if (logging::getfd() != -1) {
-        exempted_fds.push_back(logging::getfd());
-    }
+    update_mnt_ns(Clean, false);
 
     fork_pre();
     if (pid == 0) {
@@ -831,7 +820,6 @@ void hook_functions() {
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, fork);
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, unshare);
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, strdup);
-    PLT_HOOK_REGISTER_SYM(android_runtime_dev, android_runtime_inode, "__android_log_close", android_log_close);
     hook_commit();
 
     // Remove unhooked methods

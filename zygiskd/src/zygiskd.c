@@ -47,8 +47,6 @@ enum Architecture {
 #define ZYGISKD_FILE PATH_MODULES_DIR "/zygisksu/bin/zygiskd" lp_select("32", "64")
 #define ZYGISKD_PATH "/data/adb/modules/zygisksu/bin/zygiskd" lp_select("32", "64")
 
-bool first_process = true;
-
 static enum Architecture get_arch(void) {
   char system_arch[32];
   get_property("ro.product.cpu.abi", system_arch);
@@ -412,6 +410,7 @@ void zygiskd_start(char *restrict argv[]) {
     return;
   }
 
+  bool first_process = true;
   while (1) {
     int client_fd = accept(socket_fd, NULL, NULL);
     if (client_fd == -1) {
@@ -464,37 +463,6 @@ void zygiskd_start(char *restrict argv[]) {
 
           exit(1);
         }
-
-        break;
-      }
-      /* TODO: Move to another thread and save client fds to an epoll list
-                 so that we can, in a single-thread, deal with multiple logcats */
-      case RequestLogcatFd: {
-        uint8_t level = 0;
-        ssize_t ret = read_uint8_t(client_fd, &level);
-        ASSURE_SIZE_READ_BREAK("RequestLogcatFd", "level", ret, sizeof(level));
-
-        char tag[128 + 1];
-        ret = read_string(client_fd, tag, sizeof(tag));
-        if (ret == -1) {
-          LOGE("Failed reading logcat tag.\n");
-
-          close(client_fd);
-
-          break;
-        }
-
-        char message[1024 + 1];
-        ret = read_string(client_fd, message, sizeof(message));
-        if (ret == -1) {
-          LOGE("Failed reading logcat message.\n");
-
-          close(client_fd);
-
-          break;
-        }
-
-        __android_log_print(level, tag, "%s", message);
 
         break;
       }
@@ -718,9 +686,14 @@ void zygiskd_start(char *restrict argv[]) {
         ret = read_uint8_t(client_fd, &mns_state);
         ASSURE_SIZE_READ_BREAK("GetCleanNamespace", "mns_state", ret, sizeof(mns_state));
 
-        pid_t our_pid = getpid();
+        uint32_t our_pid = (uint32_t)getpid();
         ret = write_uint32_t(client_fd, (uint32_t)our_pid);
         ASSURE_SIZE_WRITE_BREAK("GetCleanNamespace", "our_pid", ret, sizeof(our_pid));
+
+        if ((enum MountNamespaceState)mns_state == Clean) {
+          save_mns_fd(pid, Rooted, impl);
+          save_mns_fd(pid, Module, impl);
+        }
 
         uint32_t clean_namespace_fd = (uint32_t)save_mns_fd(pid, (enum MountNamespaceState)mns_state, impl);
         ret = write_uint32_t(client_fd, clean_namespace_fd);
@@ -730,7 +703,7 @@ void zygiskd_start(char *restrict argv[]) {
       }
     }
 
-    if (action != RequestCompanionSocket && action != RequestLogcatFd) close(client_fd);
+    if (action != RequestCompanionSocket) close(client_fd);
 
     continue;
   }

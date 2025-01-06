@@ -63,19 +63,6 @@ namespace zygiskd {
     return true;
   }
 
-  int RequestLogcatFd() {
-    int fd = Connect(1);
-    if (fd == -1) {
-      PLOGE("RequestLogcatFd");
-
-      return -1;
-    }
-
-    socket_utils::write_u8(fd, (uint8_t) SocketAction::RequestLogcatFd);
-
-    return fd;
-  }
-
   uint32_t GetProcessFlags(uid_t uid) {
     int fd = Connect(1);
     if (fd == -1) {
