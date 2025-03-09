@@ -48,7 +48,7 @@ enum {
 void name##_pre();         \
 void name##_post();
 
-#define MAX_FD_SIZE 1024
+#define MAX_FD_SIZE 32768
 
 struct ZygiskContext;
 
