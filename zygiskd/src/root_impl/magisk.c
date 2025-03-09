@@ -19,7 +19,7 @@ char *supported_variants[] = {
 };
 
 char *magisk_managers[] = {
-  "com.topjohnwu.magisk",
+  "io.github.huskydg.magisk",
   "io.github.huskydg.magisk"
 };
 
