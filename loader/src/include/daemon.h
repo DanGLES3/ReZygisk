@@ -61,18 +61,24 @@ struct zygote_info {
   bool running;
 };
 
+enum mount_namespace_state {
+    Clean,
+    Rooted,
+    Module
+};
+
 namespace zygiskd {
 
-    struct Module {
+    struct ModuleInfo {
+        std::string path;
+        /* TODO: Perhaps we can also remove this and just send paths? */
         std::string name;
-        UniqueFd memfd;
 
-        inline explicit Module(std::string name, int memfd) : name(name), memfd(memfd) {}
+        inline explicit ModuleInfo(std::string path, std::string name) : path(path), name(name) {}
     };
 
     enum class SocketAction {
         PingHeartBeat,
-        RequestLogcatFd,
         GetProcessFlags,
         GetInfo,
         ReadModules,
@@ -80,6 +86,7 @@ namespace zygiskd {
         GetModuleDir,
         ZygoteRestart,
         SystemServerStarted,
+        UpdateMountNamespace
     };
 
     void Init(const char *path);
@@ -88,9 +95,7 @@ namespace zygiskd {
 
     bool PingHeartbeat();
 
-    int RequestLogcatFd();
-
-    std::vector<Module> ReadModules();
+    std::vector<ModuleInfo> ReadModules();
 
     uint32_t GetProcessFlags(uid_t uid);
 
@@ -103,4 +108,6 @@ namespace zygiskd {
     void SystemServerStarted();
 
     void GetInfo(struct zygote_info *info);
+
+    std::string UpdateMountNamespace(enum mount_namespace_state mns_state);
 }

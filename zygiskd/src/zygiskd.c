@@ -83,35 +83,7 @@ int create_library_fd(const char *restrict so_path) {
     return -1;
   }
 
-  /* INFO: This is required as older implementations of glibc may not
-             have the memfd_create function call, causing a crash. */
-  int memfd = (int)syscall(SYS_memfd_create, "jit-cache-zygisk", MFD_ALLOW_SEALING);
-  if (memfd == -1) {
-    LOGE("Failed creating memfd: %s\n", strerror(errno));
-
-    return -1;
-  }
-
-  if (sendfile(memfd, so_fd, NULL, (size_t)so_size) == -1) {
-    LOGE("Failed copying so file to memfd: %s\n", strerror(errno));
-
-    close(so_fd);
-    close(memfd);
-
-    return -1;
-  }
-
-  close(so_fd);
-
-  if (fcntl(memfd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL) == -1) {
-    LOGE("Failed sealing memfd: %s\n", strerror(errno));
-
-    close(memfd);
-
-    return -1;
-  }
-
-  return memfd;
+  return so_fd;
 }
 
 /* WARNING: Dynamic memory based */
@@ -410,6 +382,7 @@ void zygiskd_start(char *restrict argv[]) {
     return;
   }
 
+  bool first_process = true;
   while (1) {
     int client_fd = accept(socket_fd, NULL, NULL);
     if (client_fd == -1) {
@@ -465,51 +438,26 @@ void zygiskd_start(char *restrict argv[]) {
 
         break;
       }
-      /* TODO: Move to another thread and save client fds to an epoll list
-                 so that we can, in a single-thread, deal with multiple logcats */
-      case RequestLogcatFd: {
-        uint8_t level = 0;
-        ssize_t ret = read_uint8_t(client_fd, &level);
-        ASSURE_SIZE_READ_BREAK("RequestLogcatFd", "level", ret, sizeof(level));
-
-        char tag[128 + 1];
-        ret = read_string(client_fd, tag, sizeof(tag));
-        if (ret == -1) {
-          LOGE("Failed reading logcat tag.\n");
-
-          close(client_fd);
-
-          break;
-        }
-
-        char message[1024 + 1];
-        ret = read_string(client_fd, message, sizeof(message));
-        if (ret == -1) {
-          LOGE("Failed reading logcat message.\n");
-
-          close(client_fd);
-
-          break;
-        }
-
-        __android_log_print(level, tag, "%s", message);
-
-        break;
-      }
       case GetProcessFlags: {
         uint32_t uid = 0;
         ssize_t ret = read_uint32_t(client_fd, &uid);
         ASSURE_SIZE_READ_BREAK("GetProcessFlags", "uid", ret, sizeof(uid));
 
         uint32_t flags = 0;
-        if (uid_is_manager(uid)) {
-          flags |= PROCESS_IS_MANAGER;
+        if (first_process) {
+          flags |= PROCESS_IS_FIRST_STARTED;
+
+          first_process = false;
         } else {
-          if (uid_granted_root(uid)) {
-            flags |= PROCESS_GRANTED_ROOT;
-          }
-          if (uid_should_umount(uid)) {
-            flags |= PROCESS_ON_DENYLIST;
+          if (uid_is_manager(uid)) {
+            flags |= PROCESS_IS_MANAGER;
+          } else {
+            if (uid_granted_root(uid)) {
+              flags |= PROCESS_GRANTED_ROOT;
+            }
+            if (uid_should_umount(uid)) {
+              flags |= PROCESS_ON_DENYLIST;
+            }
           }
         }
 
@@ -589,14 +537,28 @@ void zygiskd_start(char *restrict argv[]) {
         ssize_t ret = write_size_t(client_fd, clen);
         ASSURE_SIZE_WRITE_BREAK("ReadModules", "len", ret, sizeof(clen));
 
+        enum Architecture arch = get_arch();
+
+        char arch_str[32];
+        switch (arch) {
+          case ARM64: { strcpy(arch_str, "arm64-v8a"); break; }
+          case X86_64: { strcpy(arch_str, "x86_64"); break; }
+          case ARM32: { strcpy(arch_str, "armeabi-v7a"); break; }
+          case X86: { strcpy(arch_str, "x86"); break; }
+        }
+
         for (size_t i = 0; i < clen; i++) {
-          if (write_string(client_fd, context.modules[i].name) == -1) {
-            LOGE("Failed writing module name.\n");
+          char lib_path[PATH_MAX];
+          snprintf(lib_path, PATH_MAX, "/data/adb/modules/%s/zygisk/%s.so", context.modules[i].name, arch_str);
+
+          if (write_string(client_fd, lib_path) == -1) {
+            LOGE("Failed writing module path.\n");
 
             break;
           }
-          if (write_fd(client_fd, context.modules[i].lib_fd) == -1) {
-            LOGE("Failed writing module fd.\n");
+ 
+          if (write_string(client_fd, context.modules[i].name) == -1) {
+            LOGE("Failed writing module name.\n");
 
             break;
           }
@@ -701,9 +663,33 @@ void zygiskd_start(char *restrict argv[]) {
 
         break;
       }
+      case GetCleanNamespace: {
+        pid_t pid = 0;
+        ssize_t ret = read_uint32_t(client_fd, (uint32_t *)&pid);
+        ASSURE_SIZE_READ_BREAK("GetCleanNamespace", "pid", ret, sizeof(pid));
+
+        uint8_t mns_state = 0;
+        ret = read_uint8_t(client_fd, &mns_state);
+        ASSURE_SIZE_READ_BREAK("GetCleanNamespace", "mns_state", ret, sizeof(mns_state));
+
+        uint32_t our_pid = (uint32_t)getpid();
+        ret = write_uint32_t(client_fd, (uint32_t)our_pid);
+        ASSURE_SIZE_WRITE_BREAK("GetCleanNamespace", "our_pid", ret, sizeof(our_pid));
+
+        if ((enum MountNamespaceState)mns_state == Clean) {
+          save_mns_fd(pid, Rooted, impl);
+          save_mns_fd(pid, Module, impl);
+        }
+
+        uint32_t clean_namespace_fd = (uint32_t)save_mns_fd(pid, (enum MountNamespaceState)mns_state, impl);
+        ret = write_uint32_t(client_fd, clean_namespace_fd);
+        ASSURE_SIZE_WRITE_BREAK("GetCleanNamespace", "clean_namespace_fd", ret, sizeof(clean_namespace_fd));
+
+        break;
+      }
     }
 
-    if (action != RequestCompanionSocket && action != RequestLogcatFd) close(client_fd);
+    if (action != RequestCompanionSocket) close(client_fd);
 
     continue;
   }

@@ -120,3 +120,18 @@ sDIR make_dir(DIR *dp) {
 sFILE make_file(FILE *fp) {
     return sFILE(fp, [](FILE *fp){ return fp ? fclose(fp) : 1; });
 }
+
+int get_path_from_fd(int fd, char *buf, size_t size) {
+    if (fd < 0 || !buf || size == 0) return -1;
+
+    /* NOTE: We assume that the path is always at /data/adb/modules/xxx
+        which should never be longer than 128 chars. */
+    char proc_path[128];
+    snprintf(proc_path, sizeof(proc_path), "/proc/self/fd/%d", fd);
+
+    ssize_t len = readlink(proc_path, buf, size - 1);
+    if (len == -1) return -1;
+
+    buf[len] = '\0';
+    return 0;
+}
