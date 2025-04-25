@@ -50,8 +50,7 @@ struct rezygisk_info {
 
 enum mount_namespace_state {
   Clean,
-  Rooted,
-  Module
+  Mounted
 };
 
 #define TMP_PATH "/data/adb/rezygisk"

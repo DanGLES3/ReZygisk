@@ -134,6 +134,7 @@ ElfImg *ElfImg_create(const char *elf) {
   img->bias = -4396;
   img->elf = strdup(elf);
   img->base = NULL;
+  img->symtabs_ = NULL;
 
   if (!find_module_base(img)) {
     LOGE("Failed to find module base for %s", img->elf);
@@ -289,29 +290,41 @@ ElfW(Addr) GnuLookup(ElfImg *restrict img, const char *name, uint32_t hash) {
   return 0;
 }
 
+bool _load_symtabs(ElfImg *img) {
+  if (img->symtabs_) return true;
+
+  size_t valid_symtabs_amount = calculate_valid_symtabs_amount(img);
+  if (valid_symtabs_amount == 0) return false;
+
+  img->symtabs_ = (struct symtabs *)malloc(sizeof(struct symtabs) * valid_symtabs_amount);
+  if (!img->symtabs_) return false;
+
+  if (img->symtab_start != NULL && img->symstr_offset_for_symtab != 0) {
+    ElfW(Off) i = 0;
+    for (ElfW(Off) pos = 0; pos < img->symtab_count; pos++) {
+      unsigned int st_type = ELF_ST_TYPE(img->symtab_start[pos].st_info);
+      const char *st_name = offsetOf_char(img->header, img->symstr_offset_for_symtab + img->symtab_start[pos].st_name);
+
+      if ((st_type == STT_FUNC || st_type == STT_OBJECT) && img->symtab_start[pos].st_size) {
+        img->symtabs_[i].name = strdup(st_name);
+        img->symtabs_[i].sym = &img->symtab_start[pos];
+
+        i++;
+      }
+    }
+  }
+
+  return true;
+}
+
 ElfW(Addr) LinearLookup(ElfImg *img, const char *restrict name) {
   size_t valid_symtabs_amount = calculate_valid_symtabs_amount(img);
   if (valid_symtabs_amount == 0) return 0;
 
-  if (!img->symtabs_) {
-    img->symtabs_ = (struct symtabs *)calloc(1, sizeof(struct symtabs) * valid_symtabs_amount);
-    if (!img->symtabs_) return 0;
+  if (!_load_symtabs(img)) {
+    LOGE("Failed to load symtabs");
 
-
-    if (img->symtab_start != NULL && img->symstr_offset_for_symtab != 0) {
-      ElfW(Off) i = 0;
-      for (ElfW(Off) pos = 0; pos < img->symtab_count; pos++) {
-        unsigned int st_type = ELF_ST_TYPE(img->symtab_start[pos].st_info);
-        const char *st_name = offsetOf_char(img->header, img->symstr_offset_for_symtab + img->symtab_start[pos].st_name);
-
-        if ((st_type == STT_FUNC || st_type == STT_OBJECT) && img->symtab_start[pos].st_size) {
-          img->symtabs_[i].name = strdup(st_name);
-          img->symtabs_[i].sym = &img->symtab_start[pos];
-
-          i++;
-        }
-      }
-    }
+    return 0;
   }
 
   for (size_t i = 0; i < valid_symtabs_amount; i++) {
@@ -327,32 +340,20 @@ ElfW(Addr) LinearLookupByPrefix(ElfImg *img, const char *name) {
   size_t valid_symtabs_amount = calculate_valid_symtabs_amount(img);
   if (valid_symtabs_amount == 0) return 0;
 
-  if (!img->symtabs_) {
-    img->symtabs_ = (struct symtabs *)malloc(sizeof(struct symtabs) * valid_symtabs_amount);
-    if (!img->symtabs_) return 0;
+  if (!_load_symtabs(img)) {
+    LOGE("Failed to load symtabs");
 
-    if (img->symtab_start != NULL && img->symstr_offset_for_symtab != 0) {
-      ElfW(Off) i = 0;
-      for (ElfW(Off) pos = 0; pos < img->symtab_count; pos++) {
-        unsigned int st_type = ELF_ST_TYPE(img->symtab_start[pos].st_info);
-        const char *st_name = offsetOf_char(img->header, img->symstr_offset_for_symtab + img->symtab_start[pos].st_name);
-
-        if ((st_type == STT_FUNC || st_type == STT_OBJECT) && img->symtab_start[pos].st_size) {
-          img->symtabs_[i].name = strdup(st_name);
-          img->symtabs_[i].sym = &img->symtab_start[pos];
-
-          i++;
-        }
-      }
-    }
+    return 0;
   }
 
   for (size_t i = 0; i < valid_symtabs_amount; i++) {
     if (strlen(img->symtabs_[i].name) < strlen(name))
       continue;
 
-    if (strncmp(img->symtabs_[i].name, name, strlen(name)) == 0)
-      return img->symtabs_[i].sym->st_value;
+    if (strncmp(img->symtabs_[i].name, name, strlen(name)) != 0)
+      continue;
+
+    return img->symtabs_[i].sym->st_value;
   }
 
   return 0;
@@ -374,7 +375,7 @@ ElfW(Addr) getSymbOffset(ElfImg *img, const char *name) {
 ElfW(Addr) getSymbAddress(ElfImg *img, const char *name) {
   ElfW(Addr) offset = getSymbOffset(img, name);
 
-  if (offset < 0 || !img->base) return 0;
+  if (offset == 0 || !img->base) return 0;
 
   return ((uintptr_t)img->base + offset - img->bias);
 }

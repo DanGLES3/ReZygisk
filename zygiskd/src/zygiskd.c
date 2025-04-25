@@ -643,12 +643,20 @@ void zygiskd_start(char *restrict argv[]) {
         ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "our_pid", ret, sizeof(our_pid));
 
         if ((enum MountNamespaceState)mns_state == Clean) {
-          save_mns_fd(pid, Rooted, impl);
-          save_mns_fd(pid, Module, impl);
+          save_mns_fd(pid, Mounted, impl);
         }
 
-        uint32_t clean_namespace_fd = (uint32_t)save_mns_fd(pid, (enum MountNamespaceState)mns_state, impl);
-        ret = write_uint32_t(client_fd, clean_namespace_fd);
+        int clean_namespace_fd = save_mns_fd(pid, (enum MountNamespaceState)mns_state, impl);
+        if (clean_namespace_fd == -1) {
+          LOGE("Failed to save mount namespace fd for pid %d: %s\n", pid, strerror(errno));
+
+          ret = write_uint32_t(client_fd, (uint32_t)0);
+          ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "clean_namespace_fd", ret, sizeof(clean_namespace_fd));
+
+          break;
+        }
+
+        ret = write_uint32_t(client_fd, (uint32_t)clean_namespace_fd);
         ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "clean_namespace_fd", ret, sizeof(clean_namespace_fd));
 
         break;

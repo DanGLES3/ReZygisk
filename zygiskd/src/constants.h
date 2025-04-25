@@ -49,8 +49,7 @@ enum RootImplState {
 
 enum MountNamespaceState {
   Clean,
-  Rooted,
-  Module
+  Mounted
 };
 
 #endif /* CONSTANTS_H */

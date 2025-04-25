@@ -82,14 +82,12 @@ int main(int argc, char **argv) {
 
       for (size_t i = 0; i < info.modules->modules_count; i++) {
         printf(" - %s\n", info.modules->modules[i]);
-
-        free(info.modules->modules[i]);
       }
-
-      free(info.modules->modules);
     } else {
       printf("Modules: N/A\n");
     }
+
+    free_rezygisk_info(&info);
 
     return 0;
   } else {
