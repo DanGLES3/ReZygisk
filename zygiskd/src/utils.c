@@ -592,13 +592,7 @@ bool parse_mountinfo(const char *restrict pid, struct mountinfos *restrict mount
   return true;
 }
 
-enum mns_umount_state {
-  Complete,
-  NotComplete,
-  Error
-};
-
-enum mns_umount_state unmount_root(struct root_impl impl) {
+bool umount_root(struct root_impl impl) {
   /* INFO: We are already in the target pid mount namespace, so actually,
              when we use self here, we meant its pid.
   */
@@ -606,15 +600,8 @@ enum mns_umount_state unmount_root(struct root_impl impl) {
   if (!parse_mountinfo("self", &mounts)) {
     LOGE("Failed to parse mountinfo\n");
 
-    return Error;
+    return false;
   }
-
-  /* INFO: Implementations like Magisk Kitsune will mount MagiskSU when boot is completed,
-             so if we cache the clean mount done before the boot is completed, it will get
-             it mounted later and hence it will leak mounts. To avoid that we will detect
-             if implementation is Kitsune, and if so, see if /system/bin... is mounted,
-             if not, it won't cache this namespace. */
-  bool magiskSU_umounted = false;
 
   switch (impl.impl) {
     case None: { break; }
@@ -656,7 +643,7 @@ enum mns_umount_state unmount_root(struct root_impl impl) {
           free(targets_to_unmount);
           free_mounts(&mounts);
 
-          return Error;
+          return false;
         }
 
         targets_to_unmount[num_targets - 1] = mount.target;
@@ -695,7 +682,6 @@ enum mns_umount_state unmount_root(struct root_impl impl) {
         if (strncmp(mount.target, "/debug_ramdisk", strlen("/debug_ramdisk")) == 0) should_unmount = true;
         if (strncmp(mount.target, "/data/adb/modules", strlen("/data/adb/modules")) == 0) should_unmount = true;
         if (strncmp(mount.root, "/adb/modules", strlen("/adb/modules")) == 0) should_unmount = true;
-        if (strncmp(mount.target, "/system/bin", strlen("/system/bin")) == 0) should_unmount = true;
 
         if (!should_unmount) continue;
 
@@ -707,13 +693,10 @@ enum mns_umount_state unmount_root(struct root_impl impl) {
           free(targets_to_unmount);
           free_mounts(&mounts);
 
-          return Error;
+          return false;
         }
 
         targets_to_unmount[num_targets - 1] = mount.target;
-
-        if (impl.impl == Magisk && strncmp(mount.target, "/system/bin", strlen("/system/bin")) == 0)
-          magiskSU_umounted = true;
       }
 
       for (size_t i = num_targets; i > 0; i--) {
@@ -732,7 +715,7 @@ enum mns_umount_state unmount_root(struct root_impl impl) {
 
   free_mounts(&mounts);
 
-  return (impl.impl == Magisk && !magiskSU_umounted) ? NotComplete : Complete;
+  return true;
 }
 
 int save_mns_fd(int pid, enum MountNamespaceState mns_state, struct root_impl impl) {
@@ -770,22 +753,20 @@ int save_mns_fd(int pid, enum MountNamespaceState mns_state, struct root_impl im
     if (switch_mount_namespace(pid) == false) {
       LOGE("Failed to switch mount namespace\n");
 
-      write_uint8_t(writer, (uint8_t)Error);
+      write_uint8_t(writer, (uint8_t)false);
 
       close(writer);
 
       _exit(1);
     }
 
-    enum mns_umount_state umount_state = Complete;
-
     if (mns_state == Clean) {
       unshare(CLONE_NEWNS);
-      umount_state = unmount_root(impl);
-      if (umount_state == Error) {
+
+      if (!umount_root(impl)) {
         LOGE("Failed to umount root");
 
-        write_uint8_t(writer, (uint8_t)umount_state);
+        write_uint8_t(writer, false);
 
         close(writer);
 
@@ -793,22 +774,21 @@ int save_mns_fd(int pid, enum MountNamespaceState mns_state, struct root_impl im
       }
     }
 
-    uint32_t mypid = 0;
-    while (mypid != (uint32_t)getpid()) {
-      write_uint8_t(writer, (uint8_t)umount_state);
-      usleep(50);
-      read_uint32_t(reader, &mypid);
-    }
+    write_uint8_t(writer, true);
+
+    /* INFO: Just a delay for the original process to open ns mnt */
+    uint8_t has_opened = 0;
+    read_uint8_t(reader, &has_opened);
 
     close(writer);
 
     _exit(0);
   }
 
-  enum mns_umount_state umount_state = (enum mns_umount_state)0;
-  read_uint8_t(reader, (uint8_t *)&umount_state);
+  bool has_succeeded = true;
+  read_uint8_t(reader, (uint8_t *)&has_succeeded);
 
-  if (umount_state == Error) {
+  if (!has_succeeded) {
     LOGE("Failed to unmount root\n");
 
     close(reader);
@@ -830,7 +810,7 @@ int save_mns_fd(int pid, enum MountNamespaceState mns_state, struct root_impl im
     return -1;
   }
 
-  write_uint32_t(writer, (uint32_t)fork_pid);
+  write_uint8_t(writer, has_succeeded);
 
   if (close(reader) == -1) {
     LOGE("Failed to close reader: %s\n", strerror(errno));
@@ -848,6 +828,42 @@ int save_mns_fd(int pid, enum MountNamespaceState mns_state, struct root_impl im
     LOGE("waitpid: %s\n", strerror(errno));
 
     return -1;
+  }
+
+  if (impl.impl == Magisk && impl.variant == Kitsune && mns_state == Clean) {
+    LOGI("[Magisk] Magisk Kitsune detected, will skip cache first.");
+
+    /* INFO: MagiskSU of Kitsune has a special behavior: It is only mounted
+               once system boots, because of that, we can only cache once
+               that happens, or else it will clean the mounts, then later
+               get MagiskSU mounted, resulting in a mount leak.
+
+       SOURCES:
+        - https://github.com/1q23lyc45/KitsuneMagisk/blob/8562a0b2ad142d21566c1ea41690ad64108ca14c/native/src/core/bootstages.cpp#L359
+    */
+    char boot_completed[2];
+    get_property("sys.boot_completed", boot_completed);
+
+    if (boot_completed[0] == '1') {
+      LOGI("[Magisk] Appropriate mns found, caching clean namespace fd.");
+
+      clean_namespace_fd = ns_fd;
+    }
+
+    /* BUG: For the case where it hasn't booted yet, we will need to
+              keep creating mns that will be left behind, the issue is:
+              they are not close'd. This is a problem, because we will
+              have a leak of fds, although only from the period of booting.
+
+            When trying to close the ns_fd from the libzygisk.so, fdsan
+              will complain as it is owned by RandomAccessFile, and if
+              we close from ReZygiskd, system will refuse to boot for
+              some reason, even if we wait for setns in libzygisk.so,
+              and that issue is related to setns, as it only happens
+              with it.
+    */
+
+    return ns_fd;
   }
 
   if (mns_state == Clean) clean_namespace_fd = ns_fd;

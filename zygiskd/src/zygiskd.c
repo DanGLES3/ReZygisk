@@ -492,7 +492,7 @@ void zygiskd_start(char *restrict argv[]) {
         size_t modules_len = context.len;
         ret = write_size_t(client_fd, modules_len);
         ASSURE_SIZE_WRITE_BREAK("GetInfo", "modules_len", ret, sizeof(modules_len));
-        
+
         for (size_t i = 0; i < modules_len; i++) {
           ret = write_string(client_fd, context.modules[i].name);
           if (ret == -1) {
@@ -639,25 +639,24 @@ void zygiskd_start(char *restrict argv[]) {
         ASSURE_SIZE_READ_BREAK("UpdateMountNamespace", "mns_state", ret, sizeof(mns_state));
 
         uint32_t our_pid = (uint32_t)getpid();
-        ret = write_uint32_t(client_fd, (uint32_t)our_pid);
+        ret = write_uint32_t(client_fd, our_pid);
         ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "our_pid", ret, sizeof(our_pid));
 
-        if ((enum MountNamespaceState)mns_state == Clean) {
+        if ((enum MountNamespaceState)mns_state == Clean)
           save_mns_fd(pid, Mounted, impl);
-        }
 
-        int clean_namespace_fd = save_mns_fd(pid, (enum MountNamespaceState)mns_state, impl);
-        if (clean_namespace_fd == -1) {
+        int ns_fd = save_mns_fd(pid, (enum MountNamespaceState)mns_state, impl);
+        if (ns_fd == -1) {
           LOGE("Failed to save mount namespace fd for pid %d: %s\n", pid, strerror(errno));
 
           ret = write_uint32_t(client_fd, (uint32_t)0);
-          ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "clean_namespace_fd", ret, sizeof(clean_namespace_fd));
+          ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "ns_fd", ret, sizeof(ns_fd));
 
           break;
         }
 
-        ret = write_uint32_t(client_fd, (uint32_t)clean_namespace_fd);
-        ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "clean_namespace_fd", ret, sizeof(clean_namespace_fd));
+        ret = write_uint32_t(client_fd, (uint32_t)ns_fd);
+        ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "ns_fd", ret, sizeof(ns_fd));
 
         break;
       }
