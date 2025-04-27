@@ -45,6 +45,25 @@ int read_fd(int fd) {
   return sendfd;
 }
 
+ssize_t write_string(int fd, const char *str) {
+  size_t str_len = strlen(str);
+  ssize_t write_bytes = write(fd, &str_len, sizeof(size_t));
+  if (write_bytes != (ssize_t)sizeof(size_t)) {
+    LOGE("Failed to write string length: Not all bytes were written (%zd != %zu).\n", write_bytes, sizeof(size_t));
+
+    return -1;
+  }
+
+  write_bytes = write(fd, str, str_len);
+  if (write_bytes != (ssize_t)str_len) {
+    LOGE("Failed to write string: Promised bytes doesn't exist (%zd != %zu).\n", write_bytes, str_len);
+
+    return -1;
+  }
+
+  return write_bytes;
+}
+
 char *read_string(int fd) {
   size_t str_len = 0;
   ssize_t read_bytes = read(fd, &str_len, sizeof(size_t));

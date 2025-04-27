@@ -13,6 +13,8 @@
   #define lp_select(a, b) a
 #endif
 
+#define PROCESS_NAME_MAX_LEN 256 + 1
+
 #define ZYGOTE_INJECTED lp_select(5, 4)
 #define DAEMON_SET_INFO lp_select(7, 6)
 #define DAEMON_SET_ERROR_INFO lp_select(9, 8)

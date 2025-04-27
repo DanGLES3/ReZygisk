@@ -64,7 +64,7 @@ bool rezygiskd_ping() {
   return true;
 }
 
-uint32_t rezygiskd_get_process_flags(uid_t uid) {
+uint32_t rezygiskd_get_process_flags(uid_t uid, const char *const process) {
   int fd = rezygiskd_connect(1);
   if (fd == -1) {
     PLOGE("connection to ReZygiskd");
@@ -74,6 +74,7 @@ uint32_t rezygiskd_get_process_flags(uid_t uid) {
 
   write_uint8_t(fd, (uint8_t)GetProcessFlags);
   write_uint32_t(fd, (uint32_t)uid);
+  write_string(fd, process);
 
   uint32_t res = 0;
   read_uint32_t(fd, &res);

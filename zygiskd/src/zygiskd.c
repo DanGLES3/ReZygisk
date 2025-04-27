@@ -415,6 +415,15 @@ void zygiskd_start(char *restrict argv[]) {
         ssize_t ret = read_uint32_t(client_fd, &uid);
         ASSURE_SIZE_READ_BREAK("GetProcessFlags", "uid", ret, sizeof(uid));
 
+        /* INFO: Only used for Magisk, as it saves process names and not UIDs. */
+        char process[PROCESS_NAME_MAX_LEN];
+        ret = read_string(client_fd, process, sizeof(process));
+        if (ret == -1) {
+          LOGE("Failed reading process name.\n");
+
+          break;
+        }
+
         uint32_t flags = 0;
         if (first_process) {
           flags |= PROCESS_IS_FIRST_STARTED;
@@ -427,7 +436,7 @@ void zygiskd_start(char *restrict argv[]) {
             if (uid_granted_root(uid)) {
               flags |= PROCESS_GRANTED_ROOT;
             }
-            if (uid_should_umount(uid)) {
+            if (uid_should_umount(uid, (const char *const)process)) {
               flags |= PROCESS_ON_DENYLIST;
             }
           }

@@ -131,37 +131,17 @@ bool magisk_uid_granted_root(uid_t uid) {
   return result[0] != '\0';
 }
 
-bool magisk_uid_should_umount(uid_t uid) {
-  char uid_str[16];
-  snprintf(uid_str, sizeof(uid_str), "%d", uid);
-
-  char *const argv_pm[] = { "pm", "list", "packages", "--uid", uid_str, NULL };
-
-  char result[256];
-  if (!exec_command(result, sizeof(result), "/system/bin/pm", argv_pm)) {
-    LOGE("Failed to execute pm binary: %s\n", strerror(errno));
-    errno = 0;
-
-    /* INFO: It's better if we do NOT umount than the opposite */
-    return false;
-  }
-
-  if (result[0] == '\0') {
-    LOGE("Failed to get package name from UID %d\n", uid);
-
-    return false;
-  }
-
-  char *package_name = strtok(result + strlen("package:"), " ");
-
-  char sqlite_cmd[256];
+bool magisk_uid_should_umount(const char *const process) {
+  /* INFO: PROCESS_NAME_MAX_LEN already has a +1 for NULL */
+  char sqlite_cmd[51 + PROCESS_NAME_MAX_LEN];
   if (is_using_sulist)
-    snprintf(sqlite_cmd, sizeof(sqlite_cmd), "select 1 from sulist where package_name=\"%s\" limit 1", package_name);
+    snprintf(sqlite_cmd, sizeof(sqlite_cmd), "SELECT 1 FROM sulist WHERE process=\"%s\" LIMIT 1", process);
   else
-    snprintf(sqlite_cmd, sizeof(sqlite_cmd), "select 1 from denylist where package_name=\"%s\" limit 1", package_name);
+    snprintf(sqlite_cmd, sizeof(sqlite_cmd), "SELECT 1 FROM denylist WHERE process=\"%s\" LIMIT 1", process);
 
   char *const argv[] = { "magisk", "--sqlite", sqlite_cmd, NULL };
 
+  char result[sizeof("1=1")];
   if (!exec_command(result, sizeof(result), (const char *)path_to_magisk, argv)) {
     LOGE("Failed to execute magisk binary: %s\n", strerror(errno));
     errno = 0;

@@ -4,6 +4,8 @@
 #include <stdint.h>
 
 int read_fd(int fd);
+
+ssize_t write_string(int fd, const char *str);
   
 char *read_string(int fd);
 
