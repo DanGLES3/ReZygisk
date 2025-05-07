@@ -6,6 +6,7 @@
 #include <sys/sysmacros.h>
 #include <sys/ptrace.h>
 #include <sys/mman.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/auxv.h>
@@ -19,10 +20,9 @@
 #include <unistd.h>
 #include <linux/limits.h>
 
-#include "utils.h"
+#include "elf_util.h"
 
-/* INFO: utils.h must be before logging.h so that it defined LOG_TAG first */
-#include "logging.h"
+#include "utils.h"
 
 bool switch_mnt_ns(int pid, int *fd) {
   int nsfd, old_nsfd = -1;
@@ -312,9 +312,15 @@ void *find_module_return_addr(struct maps *map, const char *suffix) {
   return NULL;
 }
 
-void *find_module_base(struct maps *map, const char *suffix) {
+void *find_module_base(struct maps *map, const char *file) {
+  const char *suffix = position_after(file, '/');
+  if (!suffix) {
+    LOGE("failed to find suffix in %s", file);
+
+    return NULL;
+  }
+
   for (size_t i = 0; i < map->size; i++) {
-    /* TODO: Make it NULL in 1 length path */
     if (map->maps[i].path == NULL) continue;
 
     const char *file_name = position_after(map->maps[i].path, '/');
@@ -329,26 +335,6 @@ void *find_module_base(struct maps *map, const char *suffix) {
 }
 
 void *find_func_addr(struct maps *local_info, struct maps *remote_info, const char *module, const char *func) {
-  void *lib = dlopen(module, RTLD_NOW);
-  if (lib == NULL) {
-    LOGE("failed to open lib %s: %s", module, dlerror());
-
-    return NULL;
-  }
-
-  uint8_t *sym = (uint8_t *)dlsym(lib, func);
-  if (sym == NULL) {
-    LOGE("failed to find sym %s in %s: %s", func, module, dlerror());
-
-    dlclose(lib);
-
-    return NULL;
-  }
-
-  LOGD("sym %s: %p", func, sym);
-
-  dlclose(lib);
-
   uint8_t *local_base = (uint8_t *)find_module_base(local_info, module);
   if (local_base == NULL) {
     LOGE("failed to find local base for module %s", module);
@@ -365,10 +351,30 @@ void *find_func_addr(struct maps *local_info, struct maps *remote_info, const ch
 
   LOGD("found local base %p remote base %p", local_base, remote_base);
 
-  uint8_t *addr = (sym - local_base) + remote_base;
-  LOGD("addr %p", addr);
+  ElfImg *mod = ElfImg_create(module, local_base);
+  if (mod == NULL) {
+    LOGE("failed to create elf img %s", module);
 
-  return addr;
+    return NULL;
+  }
+
+  uint8_t *sym = (uint8_t *)getSymbAddress(mod, func);
+  if (sym == NULL) {
+    LOGE("failed to find symbol %s in %s", func, module);
+
+    ElfImg_destroy(mod);
+
+    return NULL;
+  }
+
+  LOGD("found symbol %s in %s: %p", func, module, sym);
+
+  uintptr_t addr = (uintptr_t)(sym - local_base) + (uintptr_t)remote_base;
+  LOGD("addr %p", (void *)addr);
+
+  ElfImg_destroy(mod);
+
+  return (void *)addr;
 }
 
 void align_stack(struct user_regs_struct *regs, long preserve) {

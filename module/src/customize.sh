@@ -107,49 +107,86 @@ extract "$ZIPFILE" 'uninstall.sh'    "$MODPATH"
 mv "$TMPDIR/sepolicy.rule" "$MODPATH"
 
 mkdir "$MODPATH/bin"
-mkdir "$MODPATH/lib"
-mkdir "$MODPATH/lib64"
+
+CPU_ABIS=$(getprop ro.product.cpu.abilist)
+
+SUPPORTS_32BIT=false
+SUPPORTS_64BIT=false
+
+if [[ "$CPU_ABIS" == *"x86"* && "$CPU_ABIS" != "x86_64" || "$CPU_ABIS" == *"armeabi"* ]]; then
+  SUPPORTS_32BIT=true
+  ui_print "- Device supports 32-bit"
+fi
+
+if [[ "$CPU_ABIS" == *"x86_64"* || "$CPU_ABIS" == *"arm64-v8a"* ]]; then
+  SUPPORTS_64BIT=true
+  ui_print "- Device supports 64-bit"
+fi
+
+if [ "$SUPPORTS_32BIT" = true ]; then
+  mkdir "$MODPATH/lib"
+fi
+
+if [ "$SUPPORTS_64BIT" = true ]; then
+  mkdir "$MODPATH/lib64"
+fi
 
 if [ "$ARCH" = "x86" ] || [ "$ARCH" = "x64" ]; then
-  ui_print "- Extracting x86 libraries"
-  extract "$ZIPFILE" 'bin/x86/zygiskd' "$MODPATH/bin" true
-  mv "$MODPATH/bin/zygiskd" "$MODPATH/bin/zygiskd32"
-  extract "$ZIPFILE" 'lib/x86/libzygisk.so' "$MODPATH/lib" true
-  extract "$ZIPFILE" 'lib/x86/libzygisk_ptrace.so' "$MODPATH/bin" true
-  mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace32"
+  if [ "$SUPPORTS_32BIT" = true ]; then
+    ui_print "- Extracting x86 libraries"
+    extract "$ZIPFILE" 'bin/x86/zygiskd' "$MODPATH/bin" true
+    mv "$MODPATH/bin/zygiskd" "$MODPATH/bin/zygiskd32"
+    extract "$ZIPFILE" 'lib/x86/libzygisk.so' "$MODPATH/lib" true
+    extract "$ZIPFILE" 'lib/x86/libzygisk_ptrace.so' "$MODPATH/bin" true
+    mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace32"
 
-  ui_print "- Extracting x64 libraries"
-  extract "$ZIPFILE" 'bin/x86_64/zygiskd' "$MODPATH/bin" true
-  mv "$MODPATH/bin/zygiskd" "$MODPATH/bin/zygiskd64"
-  extract "$ZIPFILE" 'lib/x86_64/libzygisk.so' "$MODPATH/lib64" true
-  extract "$ZIPFILE" 'lib/x86_64/libzygisk_ptrace.so' "$MODPATH/bin" true
-  mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace64"
+    extract "$ZIPFILE" 'machikado.x86' "$MODPATH" true
+  fi
 
-  extract "$ZIPFILE" 'machikado.x86' "$MODPATH" true
-  mv "$MODPATH/machikado.x86" "$MODPATH/machikado"
+  if [ "$SUPPORTS_64BIT" = true ]; then
+    ui_print "- Extracting x64 libraries"
+    extract "$ZIPFILE" 'bin/x86_64/zygiskd' "$MODPATH/bin" true
+    mv "$MODPATH/bin/zygiskd" "$MODPATH/bin/zygiskd64"
+    extract "$ZIPFILE" 'lib/x86_64/libzygisk.so' "$MODPATH/lib64" true
+    extract "$ZIPFILE" 'lib/x86_64/libzygisk_ptrace.so' "$MODPATH/bin" true
+    mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace64"
+
+    extract "$ZIPFILE" 'machikado.x86_64' "$MODPATH" true
+  fi
 else
-  ui_print "- Extracting arm libraries"
-  extract "$ZIPFILE" 'bin/armeabi-v7a/zygiskd' "$MODPATH/bin" true
-  mv "$MODPATH/bin/zygiskd" "$MODPATH/bin/zygiskd32"
-  extract "$ZIPFILE" 'lib/armeabi-v7a/libzygisk.so' "$MODPATH/lib" true
-  extract "$ZIPFILE" 'lib/armeabi-v7a/libzygisk_ptrace.so' "$MODPATH/bin" true
-  mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace32"
+  if [ "$SUPPORTS_32BIT" = true ]; then
+    ui_print "- Extracting arm libraries"
+    extract "$ZIPFILE" 'bin/armeabi-v7a/zygiskd' "$MODPATH/bin" true
+    mv "$MODPATH/bin/zygiskd" "$MODPATH/bin/zygiskd32"
+    extract "$ZIPFILE" 'lib/armeabi-v7a/libzygisk.so' "$MODPATH/lib" true
+    extract "$ZIPFILE" 'lib/armeabi-v7a/libzygisk_ptrace.so' "$MODPATH/bin" true
+    mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace32"
 
-  ui_print "- Extracting arm64 libraries"
-  extract "$ZIPFILE" 'bin/arm64-v8a/zygiskd' "$MODPATH/bin" true
-  mv "$MODPATH/bin/zygiskd" "$MODPATH/bin/zygiskd64"
-  extract "$ZIPFILE" 'lib/arm64-v8a/libzygisk.so' "$MODPATH/lib64" true
-  extract "$ZIPFILE" 'lib/arm64-v8a/libzygisk_ptrace.so' "$MODPATH/bin" true
-  mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace64"
+    extract "$ZIPFILE" 'machikado.arm' "$MODPATH" true
+  fi
 
-  extract "$ZIPFILE" 'machikado.arm' "$MODPATH" true
-  mv "$MODPATH/machikado.arm" "$MODPATH/machikado"
+  if [ "$SUPPORTS_64BIT" = true ]; then
+    ui_print "- Extracting arm64 libraries"
+    extract "$ZIPFILE" 'bin/arm64-v8a/zygiskd' "$MODPATH/bin" true
+    mv "$MODPATH/bin/zygiskd" "$MODPATH/bin/zygiskd64"
+    extract "$ZIPFILE" 'lib/arm64-v8a/libzygisk.so' "$MODPATH/lib64" true
+    extract "$ZIPFILE" 'lib/arm64-v8a/libzygisk_ptrace.so' "$MODPATH/bin" true
+    mv "$MODPATH/bin/libzygisk_ptrace.so" "$MODPATH/bin/zygisk-ptrace64"
+
+    extract "$ZIPFILE" 'machikado.arm64' "$MODPATH" true
+  fi
 fi
 
 ui_print "- Setting permissions"
 set_perm_recursive "$MODPATH/bin" 0 0 0755 0755
-set_perm_recursive "$MODPATH/lib" 0 0 0755 0644 u:object_r:system_lib_file:s0
-set_perm_recursive "$MODPATH/lib64" 0 0 0755 0644 u:object_r:system_lib_file:s0
+
+if [ "$SUPPORTS_32BIT" = true ]; then
+  set_perm_recursive "$MODPATH/lib" 0 0 0755 0644 u:object_r:system_lib_file:s0
+fi
+
+if [ "$SUPPORTS_64BIT" = true ]; then
+  set_perm_recursive "$MODPATH/lib64" 0 0 0755 0644 u:object_r:system_lib_file:s0
+fi
 
 # If Huawei's Maple is enabled, system_server is created with a special way which is out of Zygisk's control
 HUAWEI_MAPLE_ENABLED=$(grep_prop ro.maple.enable)

@@ -66,7 +66,11 @@ static uint64_t *g_module_load_counter = NULL;
 static uint64_t *g_module_unload_counter = NULL;
 
 static bool solist_init() {
-  ElfImg *linker = ElfImg_create("/linker");
+  #ifdef __LP64__
+    ElfImg *linker = ElfImg_create("/system/bin/linker64", NULL);
+  #else
+    ElfImg *linker = ElfImg_create("/system/bin/linker", NULL);
+  #endif
   if (linker == NULL) {
     LOGE("Failed to load linker");
 

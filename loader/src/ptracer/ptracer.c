@@ -160,8 +160,25 @@ bool inject_on_main(int pid, const char *lib_path) {
     LOGD("libc return addr %p", libc_return_addr);
 
     /* call dlopen */
-    void *dlopen_addr = find_func_addr(local_map, map, "libdl.so", "dlopen");
-    if (dlopen_addr == NULL) return false;
+    #ifdef __LP64__
+      void *dlopen_addr = find_func_addr(local_map, map, "/apex/com.android.runtime/lib64/bionic/libdl.so", "dlopen");
+    #else
+      void *dlopen_addr = find_func_addr(local_map, map, "/apex/com.android.runtime/lib/bionic/libdl.so", "dlopen");
+    #endif
+    if (dlopen_addr == NULL) {
+      /* INFO: Android 7.1 and below doesn't have libdl.so loaded in Zygote */
+      LOGW("Failed to find dlopen from libdl.so, will load from linker");
+
+      dlopen_addr = find_func_addr(local_map, map, "/system/bin/linker", "__dl_dlopen");
+      if (dlopen_addr == NULL) {
+        PLOGE("Find __dl_dlopen");
+
+        free_maps(local_map);
+        free_maps(map);
+
+        return false;
+      }
+    }
 
     long *args = (long *)malloc(3 * sizeof(long));
     if (args == NULL) {
@@ -181,13 +198,25 @@ bool inject_on_main(int pid, const char *lib_path) {
       LOGE("handle is null");
 
       /* call dlerror */
-      void *dlerror_addr = find_func_addr(local_map, map, "libdl.so", "dlerror");
+      #ifdef __LP64__
+        void *dlerror_addr = find_func_addr(local_map, map, "/apex/com.android.runtime/lib64/bionic/libdl.so", "dlerror");
+      #else
+        void *dlerror_addr = find_func_addr(local_map, map, "/apex/com.android.runtime/lib/bionic/libdl.so", "dlerror");
+      #endif
       if (dlerror_addr == NULL) {
-        LOGE("find dlerror");
+        /* INFO: Android 7.1 and below doesn't have libdl.so loaded in Zygote */
+        LOGW("Failed to find dlerror from libdl.so, will load from linker");
 
-        free(args);
+        dlerror_addr = find_func_addr(local_map, map, "/system/bin/linker", "__dl_dlerror");
+        if (dlerror_addr == NULL) {
+          LOGE("Find __dl_dlerror");
 
-        return false;
+          free(args);
+          free_maps(local_map);
+          free_maps(map);
+
+          return false;
+        }
       }
 
       uintptr_t dlerror_str_addr = remote_call(pid, &regs, (uintptr_t)dlerror_addr, (uintptr_t)libc_return_addr, args, 0);
@@ -200,7 +229,11 @@ bool inject_on_main(int pid, const char *lib_path) {
         return false;
       }
 
-      void *strlen_addr = find_func_addr(local_map, map, "libc.so", "strlen");
+      #ifdef __LP64__
+        void *strlen_addr = find_func_addr(local_map, map, "/system/lib64/libc.so", "strlen");
+      #else
+        void *strlen_addr = find_func_addr(local_map, map, "/system/lib/libc.so", "strlen");
+      #endif
       if (strlen_addr == NULL) {
         LOGE("find strlen");
 
@@ -240,8 +273,26 @@ bool inject_on_main(int pid, const char *lib_path) {
     }
 
     /* call dlsym(handle, "entry") */
-    void *dlsym_addr = find_func_addr(local_map, map, "libdl.so", "dlsym");
-    if (dlsym_addr == NULL) return false;
+    #ifdef __LP64__
+      void *dlsym_addr = find_func_addr(local_map, map, "/apex/com.android.runtime/lib64/bionic/libdl.so", "dlsym");
+    #else
+      void *dlsym_addr = find_func_addr(local_map, map, "/apex/com.android.runtime/lib/bionic/libdl.so", "dlsym");
+    #endif
+    if (dlsym_addr == NULL) {
+      /* INFO: Android 7.1 and below doesn't have libdl.so loaded in Zygote */
+      LOGW("Failed to find dlsym from libdl.so, will load from linker");
+
+      dlsym_addr = find_func_addr(local_map, map, "/system/bin/linker", "__dl_dlsym");
+      if (dlsym_addr == NULL) {
+        LOGE("find __dl_dlsym");
+
+        free(args);
+        free_maps(local_map);
+        free_maps(map);
+
+        return false;
+      }
+    }
 
     free_maps(local_map);
 

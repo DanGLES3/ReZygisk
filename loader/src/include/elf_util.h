@@ -16,23 +16,17 @@ struct symtabs {
 typedef struct {
   char *elf;
   void *base;
-  char *buffer;
-  off_t size;
-  off_t bias;
   ElfW(Ehdr) *header;
+  size_t size;
+  off_t bias;
   ElfW(Shdr) *section_header;
-  ElfW(Shdr) *symtab;
-  ElfW(Shdr) *strtab;
+
   ElfW(Shdr) *dynsym;
-  ElfW(Sym) *symtab_start;
-  ElfW(Sym) *dynsym_start;
-  ElfW(Sym) *strtab_start;
-  ElfW(Off) symtab_count;
-  ElfW(Off) symstr_offset;
-  ElfW(Off) symstr_offset_for_symtab;
-  ElfW(Off) symtab_offset;
   ElfW(Off) dynsym_offset;
-  ElfW(Off) symtab_size;
+  ElfW(Sym) *dynsym_start;
+  ElfW(Shdr) *strtab;
+  ElfW(Off) symstr_offset;
+  void *strtab_start;
 
   uint32_t nbucket_;
   uint32_t *bucket_;
@@ -46,12 +40,19 @@ typedef struct {
   uint32_t *gnu_bucket_;
   uint32_t *gnu_chain_;
 
+  ElfW(Shdr) *symtab;
+  ElfW(Off) symtab_offset;
+  size_t symtab_size;
+  size_t symtab_count;
+  ElfW(Sym) *symtab_start;
+  ElfW(Off) symstr_offset_for_symtab;
+
   struct symtabs *symtabs_;
 } ElfImg;
 
 void ElfImg_destroy(ElfImg *img);
 
-ElfImg *ElfImg_create(const char *elf);
+ElfImg *ElfImg_create(const char *elf, void *base);
 
 ElfW(Addr) ElfLookup(ElfImg *restrict img, const char *restrict name, uint32_t hash);
 

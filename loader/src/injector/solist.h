@@ -24,9 +24,9 @@ struct pdg {
           called solist, a list with the information of opened objects.
 
         Due to special handling in ptracer, however, it won't heave gaps in the
-          memory of the list since we will close there, not loading a library creating
-          this gap. However, the previously loaded library would remain in the solist,
-          requiring ReZygisk to clean those up.
+          memory of the list since we will remove the info immediatly after loading
+          libzygisk.so, so that it doesn't create gaps between current module info
+          and the next (soinfo).
 
         To do that, we use 2 functions: soinfo_free, and set_size, which will
           zero the region size, and then remove all traces of that library (libzygisk.so)

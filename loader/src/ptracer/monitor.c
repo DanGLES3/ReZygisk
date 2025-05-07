@@ -48,10 +48,20 @@ struct rezygiskd_status {
 };
 
 struct rezygiskd_status status64 = {
-  .daemon_pid = -1
+  .supported = false,
+  .zygote_injected = false,
+  .daemon_running = false,
+  .daemon_pid = -1,
+  .daemon_info = NULL,
+  .daemon_error_info = NULL
 };
 struct rezygiskd_status status32 = {
-  .daemon_pid = -1
+  .supported = false,
+  .zygote_injected = false,
+  .daemon_running = false,
+  .daemon_pid = -1,
+  .daemon_info = NULL,
+  .daemon_error_info = NULL
 };
 
 int monitor_epoll_fd;
@@ -156,64 +166,51 @@ bool rezygiskd_listener_init() {
   return true;
 }
 
+struct __attribute__((__packed__)) MsgHead {
+  unsigned int cmd;
+  int length;
+};
+
 void rezygiskd_listener_callback() {
-  struct [[gnu::packed]] MsgHead {
-    enum rezygiskd_command cmd;
-    int length;
-    char data[0];
-  };
-
   while (1) {
-    struct MsgHead *msg = (struct MsgHead *)malloc(sizeof(struct MsgHead));
+    struct MsgHead msg = { 0 };
 
-    ssize_t real_size;
-    ssize_t nread = recv(monitor_sock_fd, msg, sizeof(struct MsgHead), MSG_PEEK);
-    if (nread == -1) {
-      if (errno == EAGAIN) break;
+    size_t nread;
 
-      PLOGE("read socket");
-    }
+    again:
+      nread = read(monitor_sock_fd, &msg, sizeof(msg));
+      if ((int)nread == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) goto again;
 
-    if ((size_t)nread < sizeof(enum rezygiskd_command)) {
-      LOGE("read %zu < %zu", nread, sizeof(enum rezygiskd_command));
-      continue;
-    }
-
-    if (msg->cmd >= DAEMON64_SET_INFO && msg->cmd != SYSTEM_SERVER_STARTED) {
-      if (nread != sizeof(msg)) {
-        LOGE("cmd %d size %zu != %zu", msg->cmd, nread, sizeof(struct MsgHead));
+        PLOGE("read socket");
 
         continue;
       }
 
-      real_size = sizeof(struct MsgHead) + msg->length;
-    } else {
-      if (nread != sizeof(enum rezygiskd_command)) {
-        LOGE("cmd %d size %zu != %zu", msg->cmd, nread, sizeof(enum rezygiskd_command));
+    char *msg_data = NULL;
+
+    if (msg.length != 0) {
+      msg_data = malloc(msg.length);
+      if (!msg_data) {
+        LOGE("malloc msg data failed");
 
         continue;
       }
 
-      real_size = sizeof(enum rezygiskd_command);
+      again_msg_data:
+        nread = read(monitor_sock_fd, msg_data, msg.length);
+        if ((int)nread == -1) {
+          if (errno == EAGAIN || errno == EWOULDBLOCK) goto again_msg_data;
+
+          PLOGE("read socket");
+
+          free(msg_data);
+
+          continue;
+        }
     }
 
-    msg = (struct MsgHead *)realloc(msg, real_size);
-    nread = recv(monitor_sock_fd, msg, real_size, 0);
-
-    if (nread == -1) {
-      if (errno == EAGAIN) break;
-
-      PLOGE("recv");
-      continue;
-    }
-
-    if (nread != real_size) {
-      LOGE("real size %zu != %zu", real_size, nread);
-
-      continue;
-    }
-
-    switch (msg->cmd) {
+    switch (msg.cmd) {
       case START: {
         if (tracing_state == STOPPING) tracing_state = TRACING;
         else if (tracing_state == STOPPED) {
@@ -267,7 +264,7 @@ void rezygiskd_listener_callback() {
         break;
       }
       case DAEMON64_SET_INFO: {
-        LOGD("received daemon64 info %s", msg->data);
+        LOGD("received daemon64 info %s", msg_data);
 
         /* Will only happen if somehow the daemon restarts */
         if (status64.daemon_info) {
@@ -275,42 +272,42 @@ void rezygiskd_listener_callback() {
           status64.daemon_info = NULL;
         }
 
-        status64.daemon_info = (char *)malloc(msg->length);
+        status64.daemon_info = (char *)malloc(msg.length);
         if (!status64.daemon_info) {
           PLOGE("malloc daemon64 info");
 
           break;
         }
 
-        strcpy(status64.daemon_info, msg->data);
+        strcpy(status64.daemon_info, msg_data);
 
         update_status(NULL);
 
         break;
       }
       case DAEMON32_SET_INFO: {
-        LOGD("received daemon32 info %s", msg->data);
+        LOGD("received daemon32 info %s", msg_data);
 
         if (status32.daemon_info) {
           free(status32.daemon_info);
           status32.daemon_info = NULL;
         }
 
-        status32.daemon_info = (char *)malloc(msg->length);
+        status32.daemon_info = (char *)malloc(msg.length);
         if (!status32.daemon_info) {
           PLOGE("malloc daemon32 info");
 
           break;
         }
 
-        strcpy(status32.daemon_info, msg->data);
+        strcpy(status32.daemon_info, msg_data);
 
         update_status(NULL);
 
         break;
       }
       case DAEMON64_SET_ERROR_INFO: {
-        LOGD("received daemon64 error info %s", msg->data);
+        LOGD("received daemon64 error info %s", msg_data);
 
         status64.daemon_running = false;
 
@@ -319,21 +316,21 @@ void rezygiskd_listener_callback() {
           status64.daemon_error_info = NULL;
         }
 
-        status64.daemon_error_info = (char *)malloc(msg->length);
+        status64.daemon_error_info = (char *)malloc(msg.length);
         if (!status64.daemon_error_info) {
           PLOGE("malloc daemon64 error info");
 
           break;
         }
 
-        strcpy(status64.daemon_error_info, msg->data);
+        strcpy(status64.daemon_error_info, msg_data);
 
         update_status(NULL);
 
         break;
       }
       case DAEMON32_SET_ERROR_INFO: {
-        LOGD("received daemon32 error info %s", msg->data);
+        LOGD("received daemon32 error info %s", msg_data);
 
         status32.daemon_running = false;
 
@@ -342,14 +339,14 @@ void rezygiskd_listener_callback() {
           status32.daemon_error_info = NULL;
         }
 
-        status32.daemon_error_info = (char *)malloc(msg->length);
+        status32.daemon_error_info = (char *)malloc(msg.length);
         if (!status32.daemon_error_info) {
           PLOGE("malloc daemon32 error info");
 
           break;
         }
 
-        strcpy(status32.daemon_error_info, msg->data);
+        strcpy(status32.daemon_error_info, msg_data);
 
         update_status(NULL);
 
@@ -366,7 +363,9 @@ void rezygiskd_listener_callback() {
       }
     }
 
-    free(msg);
+    if (msg_data) free(msg_data);
+
+    break;
   }
 }
 
@@ -402,39 +401,42 @@ CREATE_ZYGOTE_START_COUNTER(32)
 
 static bool ensure_daemon_created(bool is_64bit) {
   struct rezygiskd_status *status = is_64bit ? &status64 : &status32;
-  if (is_64bit) {
+
+  if (is_64bit || (!is_64bit && !status64.supported)) {
     LOGD("new zygote started.");
 
     umount2("/data/adb/modules/zygisksu/module.prop", MNT_DETACH);
   }
 
-  status->zygote_injected = false;
+  if (status->daemon_pid != -1) {
+    LOGI("daemon%s already running", is_64bit ? "64" : "32");
 
-  if (status->daemon_pid == -1) {
-    pid_t pid = fork();
-    if (pid < 0) {
-      PLOGE("create daemon%s", is_64bit ? "64" : "32");
-
-      return false;
-    } else if (pid == 0) {
-      char daemon_name[PATH_MAX] = "./bin/zygiskd";
-      strcat(daemon_name, is_64bit ? "64" : "32");
-
-      execl(daemon_name, daemon_name, NULL);
-
-      PLOGE("exec daemon %s failed", daemon_name);
-
-      exit(1);
-    } else {
-      status->supported = true;
-      status->daemon_pid = pid;
-      status->daemon_running = true;
-
-      return true;
-    }
-  } else {
     return status->daemon_running;
   }
+
+  pid_t pid = fork();
+  if (pid < 0) {
+    PLOGE("create daemon%s", is_64bit ? "64" : "32");
+
+    return false;
+  }
+
+  if (pid == 0) {
+    char daemon_name[PATH_MAX] = "./bin/zygiskd";
+    strcat(daemon_name, is_64bit ? "64" : "32");
+
+    execl(daemon_name, daemon_name, NULL);
+
+    PLOGE("exec daemon %s failed", daemon_name);
+
+    exit(1);
+  }
+
+  status->supported = true;
+  status->daemon_pid = pid;
+  status->daemon_running = true;
+
+  return true;
 }
 
 #define CHECK_DAEMON_EXIT(abi)                                                   \
@@ -845,20 +847,33 @@ void init_monitor() {
 
   monitor_events_init();
 
-  rezygiskd_listener_init();
-
   struct monitor_event_cbs listener_cbs = {
     .callback = rezygiskd_listener_callback,
     .stop_callback = rezygiskd_listener_stop
   };
-  monitor_events_register_event(&listener_cbs, monitor_sock_fd, EPOLLIN | EPOLLET);
+  if (!rezygiskd_listener_init()) {
+    LOGE("failed to create socket");
 
-  sigchld_listener_init();
+    close(monitor_epoll_fd);
+
+    exit(1);
+  }
+
+  monitor_events_register_event(&listener_cbs, monitor_sock_fd, EPOLLIN | EPOLLET);
 
   struct monitor_event_cbs sigchld_cbs = {
     .callback = sigchld_listener_callback,
     .stop_callback = sigchld_listener_stop
   };
+  if (sigchld_listener_init() == false) {
+    LOGE("failed to create signalfd");
+
+    rezygiskd_listener_stop();
+    close(monitor_epoll_fd);
+
+    exit(1);
+  }
+
   monitor_events_register_event(&sigchld_cbs, sigchld_signal_fd, EPOLLIN | EPOLLET);
 
   monitor_events_loop();

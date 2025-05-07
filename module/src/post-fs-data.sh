@@ -46,5 +46,12 @@ if [ -f $MODDIR/lib/libzygisk.so ];then
   chcon u:object_r:system_file:s0 $TMP_PATH/lib/libzygisk.so
 fi
 
-[ "$DEBUG" = true ] && export RUST_BACKTRACE=1
-./bin/zygisk-ptrace64 monitor &
+CPU_ABIS=$(getprop ro.product.cpu.abilist)
+
+if [[ "$CPU_ABIS" == *"arm64-v8a"* || "$CPU_ABIS" == *"x86_64"* ]]; then
+  ./bin/zygisk-ptrace64 monitor &
+else
+  # INFO: Device is 32-bit only
+
+  ./bin/zygisk-ptrace32 monitor &
+fi

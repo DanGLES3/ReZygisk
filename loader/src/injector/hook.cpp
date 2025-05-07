@@ -753,10 +753,11 @@ void ZygiskContext::nativeForkSystemServer_pre() {
     flags[SERVER_FORK_AND_SPECIALIZE] = true;
 
     fork_pre();
-    if (is_child()) {
-        run_modules_pre();
-        rezygiskd_system_server_started();
-    }
+    if (!is_child())
+      return;
+
+    run_modules_pre();
+    rezygiskd_system_server_started();
 
     sanitize_fds();
 }

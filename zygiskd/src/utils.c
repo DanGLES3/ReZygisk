@@ -729,70 +729,81 @@ int save_mns_fd(int pid, enum MountNamespaceState mns_state, struct root_impl im
     return -1;
   }
 
-  int reader = sockets[0];
-  int writer = sockets[1];
+  int socket_parent = sockets[0];
+  int socket_child = sockets[1];
 
   pid_t fork_pid = fork();
   if (fork_pid < 0) {
     LOGE("fork: %s\n", strerror(errno));
 
-    if (close(reader) == -1) {
-      LOGE("Failed to close reader: %s\n", strerror(errno));
-    }
+    if (close(socket_parent) == -1)
+      LOGE("Failed to close socket_parent: %s\n", strerror(errno));
 
-    if (close(writer) == -1) {
-      LOGE("Failed to close writer: %s\n", strerror(errno));
-    }
+    if (close(socket_child) == -1)
+      LOGE("Failed to close socket_child: %s\n", strerror(errno));
 
     return -1;
   }
 
   if (fork_pid == 0) {
-    close(reader);
+    close(socket_parent);
 
     if (switch_mount_namespace(pid) == false) {
       LOGE("Failed to switch mount namespace\n");
 
-      write_uint8_t(writer, (uint8_t)false);
+      if (write_uint8_t(socket_child, 0) == -1)
+        LOGE("Failed to write to socket_child: %s\n", strerror(errno));
 
-      close(writer);
-
-      _exit(1);
+      goto finalize_mns_fork;
     }
 
     if (mns_state == Clean) {
       unshare(CLONE_NEWNS);
 
       if (!umount_root(impl)) {
-        LOGE("Failed to umount root");
+        LOGE("Failed to umount root\n");
 
-        write_uint8_t(writer, false);
+        if (write_uint8_t(socket_child, 0) == -1)
+          LOGE("Failed to write to socket_child: %s\n", strerror(errno));
 
-        close(writer);
-
-        _exit(1);
+        goto finalize_mns_fork;
       }
     }
 
-    write_uint8_t(writer, true);
+    if (write_uint8_t(socket_child, 1) == -1) {
+      LOGE("Failed to write to socket_child: %s\n", strerror(errno));
 
-    /* INFO: Just a delay for the original process to open ns mnt */
+      close(socket_child);
+
+      _exit(1);
+    }
+
     uint8_t has_opened = 0;
-    read_uint8_t(reader, &has_opened);
+    if (read_uint8_t(socket_child, &has_opened) == -1)
+      LOGE("Failed to read from socket_child: %s\n", strerror(errno));
 
-    close(writer);
+    finalize_mns_fork:
+      if (close(socket_child) == -1)
+        LOGE("Failed to close socket_child: %s\n", strerror(errno));
 
-    _exit(0);
+      _exit(0);
   }
 
-  bool has_succeeded = true;
-  read_uint8_t(reader, (uint8_t *)&has_succeeded);
+  close(socket_child);
+
+  uint8_t has_succeeded = 0;
+  if (read_uint8_t(socket_parent, &has_succeeded) == -1) {
+    LOGE("Failed to read from socket_parent: %s\n", strerror(errno));
+
+    close(socket_parent);
+
+    return -1;
+  }
 
   if (!has_succeeded) {
-    LOGE("Failed to unmount root\n");
+    LOGE("Failed to umount root\n");
 
-    close(reader);
-    close(writer);
+    close(socket_parent);
 
     return -1;
   }
@@ -804,22 +815,25 @@ int save_mns_fd(int pid, enum MountNamespaceState mns_state, struct root_impl im
   if (ns_fd == -1) {
     LOGE("open: %s\n", strerror(errno));
 
-    close(reader);
-    close(writer);
+    close(socket_parent);
 
     return -1;
   }
 
-  write_uint8_t(writer, has_succeeded);
+  uint8_t opened_signal = 1;
+  if (write_uint8_t(socket_parent, opened_signal) == -1) {
+    LOGE("Failed to write to socket_parent: %s\n", strerror(errno));
 
-  if (close(reader) == -1) {
-    LOGE("Failed to close reader: %s\n", strerror(errno));
+    close(ns_fd);
+    close(socket_parent);
 
     return -1;
   }
 
-  if (close(writer) == -1) {
-    LOGE("Failed to close writer: %s\n", strerror(errno));
+  if (close(socket_parent) == -1) {
+    LOGE("Failed to close socket_parent: %s\n", strerror(errno));
+
+    close(ns_fd);
 
     return -1;
   }

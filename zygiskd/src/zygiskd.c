@@ -49,7 +49,7 @@ enum Architecture {
 
 static enum Architecture get_arch(void) {
   char system_arch[32];
-  get_property("ro.product.cpu.abi", system_arch);
+  get_property("ro.product.cpu.abilist", system_arch);
 
   if (strstr(system_arch, "arm") != NULL) return lp_select(ARM32, ARM64);
   if (strstr(system_arch, "x86") != NULL) return lp_select(X86, X86_64);
@@ -255,7 +255,6 @@ static int spawn_companion(char *restrict argv[], char *restrict name, int lib_f
 struct __attribute__((__packed__)) MsgHead {
   unsigned int cmd;
   int length;
-  char data[0];
 };
 
 /* WARNING: Dynamic memory based */
@@ -268,29 +267,20 @@ void zygiskd_start(char *restrict argv[]) {
   struct root_impl impl;
   get_impl(&impl);
   if (impl.impl == None || impl.impl == Multiple) {
-    struct MsgHead *msg = NULL;
-  
-    if (impl.impl == None) {
-      msg = malloc(sizeof(struct MsgHead) + strlen("Unsupported environment: Unknown root implementation") + 1);
-    } else {
-      msg = malloc(sizeof(struct MsgHead) + strlen("Unsupported environment: Multiple root implementations found") + 1);
-    }
-    if (msg == NULL) {
-      LOGE("Failed allocating memory for message.\n");
+    char *msg_data = NULL;
 
-      return;
-    }
+    if (impl.impl == None) msg_data = "Unsupported environment: Unknown root implementation";
+    else msg_data = "Unsupported environment: Multiple root implementations found";
 
-    msg->cmd = DAEMON_SET_ERROR_INFO;
-    if (impl.impl == None) {
-      msg->length = sprintf(msg->data, "Unsupported environment: Unknown root implementation");
-    } else {
-      msg->length = sprintf(msg->data, "Unsupported environment: Multiple root implementations found");
-    }
+    struct MsgHead msg = {
+      .cmd = DAEMON_SET_ERROR_INFO,
+      .length = (int)strlen(msg_data) + 1
+    };
 
-    unix_datagram_sendto(CONTROLLER_SOCKET, (void *)msg, (size_t)((int)sizeof(struct MsgHead) + msg->length));
+    unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
+    unix_datagram_sendto(CONTROLLER_SOCKET, msg_data, (size_t)msg.length);
 
-    free(msg);
+    free(msg_data);
   } else {
     enum Architecture arch = get_arch();
     load_modules(arch, &context);
@@ -337,13 +327,24 @@ void zygiskd_start(char *restrict argv[]) {
 
     size_t msg_length = strlen("Root: , Modules: ") + strlen(impl_name) + module_list_len + 1;
 
-    struct MsgHead *msg = malloc(sizeof(struct MsgHead) + msg_length);
-    msg->length = snprintf(msg->data, msg_length, "Root: %s, Modules: %s", impl_name, module_list) + 1;
-    msg->cmd = DAEMON_SET_INFO;
+    struct MsgHead msg = {
+      .cmd = DAEMON_SET_INFO,
+      .length = (int)msg_length
+    };
 
-    unix_datagram_sendto(CONTROLLER_SOCKET, (void *)msg, (size_t)((int)sizeof(struct MsgHead) + msg->length));
+    char *msg_data = malloc(msg_length);
+    if (msg_data == NULL) {
+      LOGE("Failed allocating memory for message data.\n");
 
-    free(msg);
+      return;
+    }
+
+    snprintf(msg_data, msg_length, "Root: %s, Modules: %s", impl_name, module_list);
+
+    unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
+    unix_datagram_sendto(CONTROLLER_SOCKET, msg_data, msg_length);
+
+    free(msg_data);
     free(module_list);
   }
 
@@ -379,8 +380,12 @@ void zygiskd_start(char *restrict argv[]) {
 
     switch (action) {
       case PingHeartbeat: {
-        enum DaemonSocketAction msgr = ZYGOTE_INJECTED;
-        unix_datagram_sendto(CONTROLLER_SOCKET, &msgr, sizeof(enum DaemonSocketAction));
+        struct MsgHead msg = {
+          .cmd = ZYGOTE_INJECTED,
+          .length = 0
+        };
+
+        unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
 
         break;
       }
@@ -395,8 +400,12 @@ void zygiskd_start(char *restrict argv[]) {
         break;
       }
       case SystemServerStarted: {
-        enum DaemonSocketAction msgr = SYSTEM_SERVER_STARTED;
-        unix_datagram_sendto(CONTROLLER_SOCKET, &msgr, sizeof(enum DaemonSocketAction));
+        struct MsgHead msg = {
+          .cmd = SYSTEM_SERVER_STARTED,
+          .length = 0
+        };
+
+        unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
 
         if (impl.impl == None || impl.impl == Multiple) {
           LOGI("Unsupported environment detected. Exiting.\n");
