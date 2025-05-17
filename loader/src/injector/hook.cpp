@@ -698,8 +698,6 @@ void ZygiskContext::app_specialize_pre() {
                    identify Zygisk, being it not built-in, as working, we also set it. */
         setenv("ZYGISK_ENABLED", "1", 1);
     } else {
-        run_modules_pre();
-
         /* INFO: Modules only have two "start off" points from Zygisk, preSpecialize and
                    postSpecialize. While preSpecialie in fact runs with Zygote (not superuser)
                    privileges, in postSpecialize it will now be with lower permission, in
@@ -707,10 +705,15 @@ void ZygiskContext::app_specialize_pre() {
                    executing the modules preSpecialize.
         */
         if ((info_flags & PROCESS_ON_DENYLIST) == PROCESS_ON_DENYLIST) {
-            flags[DO_REVERT_UNMOUNT] = true;
+          flags[DO_REVERT_UNMOUNT] = true;
 
-            update_mnt_ns(Clean, false);
+          update_mnt_ns(Clean, false);
         }
+
+        /* INFO: Executed after setns to ensure a module can update the mounts of an 
+                   application without worrying about it being overwritten by setns.
+        */
+        run_modules_pre();
     }
 }
 
