@@ -107,6 +107,10 @@ extract "$ZIPFILE" 'uninstall.sh'    "$MODPATH"
 mv "$TMPDIR/sepolicy.rule" "$MODPATH"
 
 mkdir "$MODPATH/bin"
+mkdir "$MODPATH/webroot"
+
+ui_print "- Extracting webroot"
+unzip -o "$ZIPFILE" "webroot/*" -x "*.sha256" -d "$MODPATH"
 
 CPU_ABIS=$(getprop ro.product.cpu.abilist)
 

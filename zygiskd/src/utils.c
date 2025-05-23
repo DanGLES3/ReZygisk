@@ -603,115 +603,57 @@ bool umount_root(struct root_impl impl) {
     return false;
   }
 
-  switch (impl.impl) {
-    case None: { break; }
-    case Multiple: { break; }
+  /* INFO: "Magisk" is the longest word that will ever be put in source_name */
+  char source_name[sizeof("magisk")];
+  if (impl.impl == KernelSU) strcpy(source_name, "KSU");
+  else if (impl.impl == APatch) strcpy(source_name, "APatch");
+  else strcpy(source_name, "magisk");
 
-    case KernelSU:
-    case APatch: {
-      char source_name[LONGEST_ROOT_IMPL_NAME];
-      if (impl.impl == KernelSU) strcpy(source_name, "KSU");
-      else strcpy(source_name, "APatch");
+  LOGI("[%s] Unmounting root", source_name);
 
-      LOGI("[%s] Unmounting root", source_name);
+  const char **targets_to_unmount = NULL;
+  size_t num_targets = 0;
 
-      const char **targets_to_unmount = NULL;
-      size_t num_targets = 0;
+  for (size_t i = 0; i < mounts.length; i++) {
+    struct mountinfo mount = mounts.mounts[i];
 
-      for (size_t i = 0; i < mounts.length; i++) {
-        struct mountinfo mount = mounts.mounts[i];
+    bool should_unmount = false;
+    /* INFO: The root implementations have their own /system mounts, so we
+                only skip the mount if they are from a module, not Magisk itself.
+    */
+    if (strncmp(mount.target, "/system/", strlen("/system/")) == 0 &&
+        strncmp(mount.root, "/adb/modules/", strlen("/adb/modules/")) == 0 &&
+        strncmp(mount.target, "/system/etc/", strlen("/system/etc/")) != 0) continue;
 
-        bool should_unmount = false;
+    if (strcmp(mount.source, source_name) == 0) should_unmount = true;
+    if (strncmp(mount.target, "/data/adb/modules", strlen("/data/adb/modules")) == 0) should_unmount = true;
+    if (strncmp(mount.root, "/adb/modules/", strlen("/adb/modules/")) == 0) should_unmount = true;
 
-        /* INFO: KernelSU has its own /system mounts, so we only skip the mount
-                    if they are from a module, not KSU itself.
-        */
-        if (strncmp(mount.target, "/system/", strlen("/system/")) == 0 && 
-            strncmp(mount.root, "/adb/modules", strlen("/adb/modules")) == 0) continue;
+    if (!should_unmount) continue;
 
-        if (strcmp(mount.source, source_name) == 0) should_unmount = true;
-        if (strncmp(mount.root, "/adb/modules", strlen("/adb/modules")) == 0) should_unmount = true;
-        if (strncmp(mount.target, "/data/adb/modules", strlen("/data/adb/modules")) == 0) should_unmount = true;
+    num_targets++;
+    targets_to_unmount = realloc(targets_to_unmount, num_targets * sizeof(char*));
+    if (targets_to_unmount == NULL) {
+      LOGE("[%s] Failed to allocate memory for targets_to_unmount\n", source_name);
 
-        if (!should_unmount) continue;
-
-        num_targets++;
-        targets_to_unmount = realloc(targets_to_unmount, num_targets * sizeof(char*));
-        if (targets_to_unmount == NULL) {
-          LOGE("[%s] Failed to allocate memory for targets_to_unmount\n", source_name);
-
-          free(targets_to_unmount);
-          free_mounts(&mounts);
-
-          return false;
-        }
-
-        targets_to_unmount[num_targets - 1] = mount.target;
-      }
-
-      for (size_t i = num_targets; i > 0; i--) {
-        const char *target = targets_to_unmount[i - 1];
-
-        if (umount2(target, MNT_DETACH) == -1) {
-          LOGE("[%s] Failed to unmount %s: %s\n", source_name, target, strerror(errno));
-        } else {
-          LOGI("[%s] Unmounted %s\n", source_name, target);
-        }
-      }
       free(targets_to_unmount);
+      free_mounts(&mounts);
 
-      break;
+      return false;
     }
-    case Magisk: {
-      LOGI("[Magisk] Unmounting root");
 
-      const char **targets_to_unmount = NULL;
-      size_t num_targets = 0;
+    targets_to_unmount[num_targets - 1] = mount.target;
+  }
 
-      for (size_t i = 0; i < mounts.length; i++) {
-        struct mountinfo mount = mounts.mounts[i];
-
-        bool should_unmount = false;
-        /* INFO: Magisk has its own /system mounts, so we only skip the mount
-                    if they are from a module, not Magisk itself.
-        */
-        if (strncmp(mount.target, "/system/", strlen("/system/")) == 0 &&
-            strncmp(mount.root, "/adb/modules", strlen("/adb/modules")) == 0) continue;
-
-        if (strcmp(mount.source, "magisk") == 0) should_unmount = true;
-        if (strncmp(mount.target, "/debug_ramdisk", strlen("/debug_ramdisk")) == 0) should_unmount = true;
-        if (strncmp(mount.target, "/data/adb/modules", strlen("/data/adb/modules")) == 0) should_unmount = true;
-        if (strncmp(mount.root, "/adb/modules", strlen("/adb/modules")) == 0) should_unmount = true;
-
-        if (!should_unmount) continue;
-
-        num_targets++;
-        targets_to_unmount = realloc(targets_to_unmount, num_targets * sizeof(char*));
-        if (targets_to_unmount == NULL) {
-          LOGE("[Magisk] Failed to allocate memory for targets_to_unmount\n");
-
-          free(targets_to_unmount);
-          free_mounts(&mounts);
-
-          return false;
-        }
-
-        targets_to_unmount[num_targets - 1] = mount.target;
-      }
-
-      for (size_t i = num_targets; i > 0; i--) {
-        const char *target = targets_to_unmount[i - 1];
-        if (umount2(target, MNT_DETACH) == -1) {
-          LOGE("[Magisk] Failed to unmount %s: %s\n", target, strerror(errno));
-        } else {
-          LOGI("[Magisk] Unmounted %s\n", target);
-        }
-      }
-      free(targets_to_unmount);
-
-      break;
+  for (size_t i = num_targets; i > 0; i--) {
+    const char *target = targets_to_unmount[i - 1];
+    if (umount2(target, MNT_DETACH) == -1) {
+      LOGE("[%s] Failed to unmount %s: %s\n", source_name, target, strerror(errno));
+    } else {
+      LOGI("[%s] Unmounted %s\n", source_name, target);
     }
   }
+  free(targets_to_unmount);
 
   free_mounts(&mounts);
 

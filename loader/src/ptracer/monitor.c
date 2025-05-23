@@ -355,7 +355,7 @@ void rezygiskd_listener_callback() {
       case SYSTEM_SERVER_STARTED: {
         LOGD("system server started, mounting prop");
 
-        if (mount(PROP_PATH, "/data/adb/modules/zygisksu/module.prop", NULL, MS_BIND, NULL) == -1) {
+        if (mount(PROP_PATH, "/data/adb/modules/rezygisk/module.prop", NULL, MS_BIND, NULL) == -1) {
           PLOGE("failed to mount prop");
         }
 
@@ -405,7 +405,7 @@ static bool ensure_daemon_created(bool is_64bit) {
   if (is_64bit || (!is_64bit && !status64.supported)) {
     LOGD("new zygote started.");
 
-    umount2("/data/adb/modules/zygisksu/module.prop", MNT_DETACH);
+    umount2("/data/adb/modules/rezygisk/module.prop", MNT_DETACH);
   }
 
   if (status->daemon_pid != -1) {
@@ -800,7 +800,7 @@ static bool prepare_environment() {
   /* INFO: We need to create the file first, otherwise the mount will fail */
   close(open(PROP_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644));
 
-  FILE *orig_prop = fopen("/data/adb/modules/zygisksu/module.prop", "r");
+  FILE *orig_prop = fopen("/data/adb/modules/rezygisk/module.prop", "r");
   if (orig_prop == NULL) {
     PLOGE("failed to open orig prop");
 

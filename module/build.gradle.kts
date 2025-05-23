@@ -85,12 +85,14 @@ androidComponents.onVariants { variant ->
         into("lib") {
             from(project(":loader").layout.buildDirectory.file("intermediates/stripped_native_libs/$variantLowered/out/lib"))
         }
+        into("webroot") {
+            from("${rootProject.projectDir}/webroot")
+        }
 
         val root = moduleDir.get()
 
         doLast {
             if (file("private_key").exists()) {
-                println("=== Guards the peace of Machikado ===")
                 val privateKey = file("private_key").readBytes()
                 val publicKey = file("public_key").readBytes()
                 val namedSpec = NamedParameterSpec("ed25519")
@@ -110,6 +112,35 @@ androidComponents.onVariants { variant ->
                     real.forEachBlock { bytes, size ->
                         sig.update(bytes, 0, size)
                     }
+                }
+
+                /* INFO: Misaki is the file that holds signed hash of
+                           all files of ReZygisk module, to ensure the
+                           zip (runtime and non-runtime) files hasn't
+                           been tampered with.
+                */
+                fun misakiSign() {
+                    sig.initSign(privKey)
+
+                    val filesToProcess = TreeSet<File> { f1, f2 ->
+                        f1.path.replace("\\", "/")
+                            .compareTo(f2.path.replace("\\", "/"))
+                    }
+
+                    root.asFile.walkTopDown().forEach { file ->
+                        if (!file.isFile) return@forEach
+
+                        val fileName = file.name
+                        if (fileName == "misaki.sig") return@forEach
+
+                        filesToProcess.add(file)
+                    }
+
+                    filesToProcess.forEach { file -> file.sha(file) }
+
+                    val misakiSignatureFile = root.file("misaki.sig").asFile
+                    misakiSignatureFile.writeBytes(sig.sign())
+                    misakiSignatureFile.appendBytes(publicKey)
                 }
 
                 fun getSign(name: String, abi: String, is64Bit: Boolean) {
@@ -143,6 +174,7 @@ androidComponents.onVariants { variant ->
                             root.file("bin/$abi/zygiskd").asFile
                         )
                     )
+
                     sig.initSign(privKey)
                     set.forEach { it.first.sha(it.second) }
                     val signFile = root.file(name).asFile
@@ -150,11 +182,32 @@ androidComponents.onVariants { variant ->
                     signFile.appendBytes(publicKey)
                 }
 
+                /* INFO: Machikado is the name of files that holds signed hash of
+                           all runtime files of ReZygisk module, to ensure the
+                           runtime files hasn't been tampered with.
+                */
+                println("=== Guards the peace of Machikado ===")
+
                 getSign("machikado.arm64", "arm64-v8a", true)
                 getSign("machikado.arm", "armeabi-v7a", false)
 
                 getSign("machikado.x86_64", "x86_64", true)
                 getSign("machikado.x86", "x86", false)
+
+                fileTree(moduleDir).visit {
+                    if (isDirectory) return@visit
+
+                    val md = MessageDigest.getInstance("SHA-256")
+                    file.forEachBlock(4096) { bytes, size ->
+                        md.update(bytes, 0, size)
+                    }
+
+                    file(file.path + ".sha256").writeText(Hex.encodeHexString(md.digest()))
+                }
+
+                println("===   At the kitsune's wedding   ===")
+
+                misakiSign()
             } else {
                 println("no private_key found, this build will not be signed")
 
@@ -163,15 +216,19 @@ androidComponents.onVariants { variant ->
 
                 root.file("machikado.x86_64").asFile.createNewFile()
                 root.file("machikado.x86").asFile.createNewFile()
-            }
 
-            fileTree(moduleDir).visit {
-                if (isDirectory) return@visit
-                val md = MessageDigest.getInstance("SHA-256")
-                file.forEachBlock(4096) { bytes, size ->
-                    md.update(bytes, 0, size)
+                fileTree(moduleDir).visit {
+                    if (isDirectory) return@visit
+
+                    val md = MessageDigest.getInstance("SHA-256")
+                    file.forEachBlock(4096) { bytes, size ->
+                        md.update(bytes, 0, size)
+                    }
+
+                    file(file.path + ".sha256").writeText(Hex.encodeHexString(md.digest()))
                 }
-                file(file.path + ".sha256").writeText(Hex.encodeHexString(md.digest()))
+
+                root.file("misaki.sig").asFile.createNewFile()
             }
         }
     }

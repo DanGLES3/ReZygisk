@@ -1,9 +1,8 @@
-name: Untrusted CI
+name: Trusted CI
 
 on:
-  pull_request:
-  merge_group:
-  workflow_dispatch:
+  push:
+    branches: [ main ]
 
 jobs:
   build:
@@ -23,6 +22,14 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4.2.1
+
+      - name: Setup keys
+        env:
+          private_key: ${{ secrets.ORG_PRIVATE_KEY }}
+          public_key: ${{ secrets.ORG_PUBLIC_KEY }}
+        run: |
+          echo "$private_key" | base64 -d > module/private_key
+          echo "$public_key" | base64 -d > module/public_key
 
       - name: Build with Gradle
         run: |

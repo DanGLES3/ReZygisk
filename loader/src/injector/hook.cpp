@@ -601,9 +601,11 @@ void ZygiskContext::sanitize_fds() {
     struct dirent *entry;
     while ((entry = readdir(dir))) {
         int fd = parse_int(entry->d_name);
-        if (fd < 0 || fd < MAX_FD_SIZE || fd == dfd || allowed_fds[fd]) continue;
+        if (fd < 0 || fd > MAX_FD_SIZE || fd == dfd || allowed_fds[fd]) continue;
 
         close(fd);
+
+        LOGW("Closed leaked fd: %d", fd);
     }
 
     closedir(dir);

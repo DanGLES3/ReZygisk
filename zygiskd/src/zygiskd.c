@@ -44,8 +44,8 @@ enum Architecture {
 #define TMP_PATH "/data/adb/rezygisk"
 #define CONTROLLER_SOCKET TMP_PATH "/init_monitor"
 #define PATH_CP_NAME TMP_PATH "/" lp_select("cp32.sock", "cp64.sock")
-#define ZYGISKD_FILE PATH_MODULES_DIR "/zygisksu/bin/zygiskd" lp_select("32", "64")
-#define ZYGISKD_PATH "/data/adb/modules/zygisksu/bin/zygiskd" lp_select("32", "64")
+#define ZYGISKD_FILE PATH_MODULES_DIR "/rezygisk/bin/zygiskd" lp_select("32", "64")
+#define ZYGISKD_PATH "/data/adb/modules/rezygisk/bin/zygiskd" lp_select("32", "64")
 
 static enum Architecture get_arch(void) {
   char system_arch[32];
@@ -83,7 +83,7 @@ static void load_modules(enum Architecture arch, struct Context *restrict contex
   struct dirent *entry;
   while ((entry = readdir(dir)) != NULL) {
     if (entry->d_type != DT_DIR) continue; /* INFO: Only directories */
-    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 || strcmp(entry->d_name, "zygisksu") == 0) continue;
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 || strcmp(entry->d_name, "rezygisk") == 0) continue;
 
     char *name = entry->d_name;
     char so_path[PATH_MAX];
