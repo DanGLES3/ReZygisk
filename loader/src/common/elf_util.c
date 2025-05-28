@@ -535,8 +535,10 @@ ElfW(Addr) GnuLookup(ElfImg *restrict img, const char *name, uint32_t hash) {
                    ((uintptr_t)1 << ((hash >> img->gnu_shift2_) % bloom_mask_bits));
 
   if ((mask & bloom_word) != mask) {
-    LOGE("Symbol '%s' (hash %u) filtered out by GNU Bloom Filter (idx %zu, mask 0x%lx, word 0x%lx)",
-         name, hash, bloom_idx, (unsigned long)mask, (unsigned long)bloom_word);
+    /* INFO: Very loggy -- generates too much noise. GNU is rarely used for Zygisk context. */
+    /* LOGW("Symbol '%s' (hash %u) filtered out by GNU Bloom Filter (idx %zu, mask 0x%lx, word 0x%lx)",
+           name, hash, bloom_idx, (unsigned long)mask, (unsigned long)bloom_word);
+    */
 
     return 0;
   }

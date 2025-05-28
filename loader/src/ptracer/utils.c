@@ -313,20 +313,12 @@ void *find_module_return_addr(struct maps *map, const char *suffix) {
 }
 
 void *find_module_base(struct maps *map, const char *file) {
-  const char *suffix = position_after(file, '/');
-  if (!suffix) {
-    LOGE("failed to find suffix in %s", file);
-
-    return NULL;
-  }
-
   for (size_t i = 0; i < map->size; i++) {
     if (map->maps[i].path == NULL) continue;
 
-    const char *file_name = position_after(map->maps[i].path, '/');
-    if (!file_name) continue;
+    const char *file_path = map->maps[i].path;
 
-    if (strlen(file_name) < strlen(suffix) || map->maps[i].offset != 0 || strncmp(file_name, suffix, strlen(suffix)) != 0) continue;
+    if (strlen(file_path) != strlen(file) || map->maps[i].offset != 0 || strncmp(file_path, file, strlen(file)) != 0) continue;
 
     return (void *)map->maps[i].start;
   }

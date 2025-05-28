@@ -62,6 +62,8 @@ bool set_regs(int pid, struct user_regs_struct *regs);
 
 void get_addr_mem_region(struct maps *map, uintptr_t addr, char *buf, size_t buf_size);
 
+const char *position_after(const char *str, const char needle);
+
 void *find_module_return_addr(struct maps *map, const char *suffix);
 
 void *find_func_addr(struct maps *local_info, struct maps *remote_info, const char *module, const char *func);

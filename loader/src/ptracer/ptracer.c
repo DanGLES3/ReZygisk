@@ -159,17 +159,30 @@ bool inject_on_main(int pid, const char *lib_path) {
     void *libc_return_addr = find_module_return_addr(map, "libc.so");
     LOGD("libc return addr %p", libc_return_addr);
 
+    const char *libdl_path = NULL;
+    for (size_t i = 0; i < local_map->size; i++) {
+      if (local_map->maps[i].path == NULL) continue;
+
+      const char *filename = position_after(local_map->maps[i].path, '/');
+
+      if (strcmp(filename, "libdl.so") == 0) {
+        libdl_path = local_map->maps[i].path;
+
+        break;
+      }
+    }
+
     /* call dlopen */
-    #ifdef __LP64__
-      void *dlopen_addr = find_func_addr(local_map, map, "/apex/com.android.runtime/lib64/bionic/libdl.so", "dlopen");
-    #else
-      void *dlopen_addr = find_func_addr(local_map, map, "/apex/com.android.runtime/lib/bionic/libdl.so", "dlopen");
-    #endif
-    if (dlopen_addr == NULL) {
+    void *dlopen_addr = NULL;
+    if (!libdl_path || (dlopen_addr = find_func_addr(local_map, map, libdl_path, "dlopen")) == NULL) {
       /* INFO: Android 7.1 and below doesn't have libdl.so loaded in Zygote */
       LOGW("Failed to find dlopen from libdl.so, will load from linker");
 
-      dlopen_addr = find_func_addr(local_map, map, "/system/bin/linker", "__dl_dlopen");
+      #ifdef __LP64__
+        dlopen_addr = find_func_addr(local_map, map, "/system/bin/linker64", "__dl_dlopen");
+      #else
+        dlopen_addr = find_func_addr(local_map, map, "/system/bin/linker", "__dl_dlopen");
+      #endif
       if (dlopen_addr == NULL) {
         PLOGE("Find __dl_dlopen");
 
@@ -198,16 +211,16 @@ bool inject_on_main(int pid, const char *lib_path) {
       LOGE("handle is null");
 
       /* call dlerror */
-      #ifdef __LP64__
-        void *dlerror_addr = find_func_addr(local_map, map, "/apex/com.android.runtime/lib64/bionic/libdl.so", "dlerror");
-      #else
-        void *dlerror_addr = find_func_addr(local_map, map, "/apex/com.android.runtime/lib/bionic/libdl.so", "dlerror");
-      #endif
-      if (dlerror_addr == NULL) {
+      void *dlerror_addr = NULL;
+      if (!libdl_path || (dlerror_addr = find_func_addr(local_map, map, libdl_path, "dlerror")) == NULL) {
         /* INFO: Android 7.1 and below doesn't have libdl.so loaded in Zygote */
         LOGW("Failed to find dlerror from libdl.so, will load from linker");
 
-        dlerror_addr = find_func_addr(local_map, map, "/system/bin/linker", "__dl_dlerror");
+        #ifdef __LP64__
+          dlerror_addr = find_func_addr(local_map, map, "/system/bin/linker64", "__dl_dlerror");
+        #else
+          dlerror_addr = find_func_addr(local_map, map, "/system/bin/linker", "__dl_dlerror");
+        #endif
         if (dlerror_addr == NULL) {
           LOGE("Find __dl_dlerror");
 
@@ -273,16 +286,16 @@ bool inject_on_main(int pid, const char *lib_path) {
     }
 
     /* call dlsym(handle, "entry") */
-    #ifdef __LP64__
-      void *dlsym_addr = find_func_addr(local_map, map, "/apex/com.android.runtime/lib64/bionic/libdl.so", "dlsym");
-    #else
-      void *dlsym_addr = find_func_addr(local_map, map, "/apex/com.android.runtime/lib/bionic/libdl.so", "dlsym");
-    #endif
-    if (dlsym_addr == NULL) {
+    void *dlsym_addr = NULL;
+    if (!libdl_path || (dlsym_addr = find_func_addr(local_map, map, libdl_path, "dlsym")) == NULL) {
       /* INFO: Android 7.1 and below doesn't have libdl.so loaded in Zygote */
       LOGW("Failed to find dlsym from libdl.so, will load from linker");
 
-      dlsym_addr = find_func_addr(local_map, map, "/system/bin/linker", "__dl_dlsym");
+      #ifdef __LP64__
+        dlsym_addr = find_func_addr(local_map, map, "/system/bin/linker64", "__dl_dlsym");
+      #else
+        dlsym_addr = find_func_addr(local_map, map, "/system/bin/linker", "__dl_dlsym");
+      #endif
       if (dlsym_addr == NULL) {
         LOGE("find __dl_dlsym");
 
@@ -404,6 +417,16 @@ bool trace_zygote(int pid) {
 
       if (STOPPED_WITH(SIGCONT, 0)) {
         LOGD("received SIGCONT");
+
+        /* INFO: Due to kernel bugs, fixed in 5.16+, ptrace_message (msg of
+             PTRACE_GETEVENTMSG) may not represent the current state of
+             the process. Because we set some options, which alters the
+             ptrace_message, we need to call PTRACE_SYSCALL to reset the
+             ptrace_message to 0, the default/normal state.
+        */
+        ptrace(PTRACE_SYSCALL, pid, 0, 0);
+
+        WAIT_OR_DIE
 
         ptrace(PTRACE_DETACH, pid, 0, SIGCONT);
       }

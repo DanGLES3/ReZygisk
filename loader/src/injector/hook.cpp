@@ -98,6 +98,7 @@ struct ZygiskContext {
     ~ZygiskContext();
 
     /* Zygisksu changed: Load module fds */
+    bool load_modules_only();
     void run_modules_pre();
     void run_modules_post();
     DCL_PRE_POST(fork)
@@ -617,13 +618,12 @@ void ZygiskContext::fork_post() {
     g_ctx = nullptr;
 }
 
-/* Zygisksu changed: Load module fds */
-void ZygiskContext::run_modules_pre() {
+bool ZygiskContext::load_modules_only() {
   struct zygisk_modules ms;
   if (rezygiskd_read_modules(&ms) == false) {
     LOGE("Failed to read modules from zygiskd");
 
-    return;
+    return false;
   }
 
   for (size_t i = 0; i < ms.modules_count; i++) {
@@ -650,6 +650,11 @@ void ZygiskContext::run_modules_pre() {
 
   free_modules(&ms);
 
+  return true;
+}
+
+/* Zygisksu changed: Load module fds */
+void ZygiskContext::run_modules_pre() {
   for (auto &m : modules) {
     m.onLoad(env);
 
@@ -700,6 +705,15 @@ void ZygiskContext::app_specialize_pre() {
                    identify Zygisk, being it not built-in, as working, we also set it. */
         setenv("ZYGISK_ENABLED", "1", 1);
     } else {
+        /* INFO: Because we load directly from the file, we need to do it before we umount
+                   the mounts, or else it won't have access to /data/adb anymore.
+        */
+        if (!load_modules_only()) {
+            LOGE("Failed to load modules");
+
+            return;
+        }
+
         /* INFO: Modules only have two "start off" points from Zygisk, preSpecialize and
                    postSpecialize. While preSpecialie in fact runs with Zygote (not superuser)
                    privileges, in postSpecialize it will now be with lower permission, in
@@ -761,6 +775,7 @@ void ZygiskContext::nativeForkSystemServer_pre() {
     if (!is_child())
       return;
 
+    load_modules_only();
     run_modules_pre();
     rezygiskd_system_server_started();
 
