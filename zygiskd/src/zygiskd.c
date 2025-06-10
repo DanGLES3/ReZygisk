@@ -130,6 +130,8 @@ static void load_modules(enum Architecture arch, struct Context *restrict contex
     context->modules[context->len].companion = -1;
     context->len++;
   }
+
+  closedir(dir);
 }
 
 static void free_modules(struct Context *restrict context) {

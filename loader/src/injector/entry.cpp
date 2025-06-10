@@ -22,5 +22,7 @@ void entry(void* addr, size_t size, const char* path) {
 
     LOGD("start plt hooking");
     hook_functions();
-    clean_trace(path, 1, 0, false);
+
+    void *module_addrs[1] = { addr };
+    clean_trace(path, module_addrs, 1, 1, 0, false);
 }

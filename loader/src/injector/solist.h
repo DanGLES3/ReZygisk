@@ -35,7 +35,7 @@ struct pdg {
   SOURCES:
    - https://android.googlesource.com/platform/bionic/+/refs/heads/android15-release/linker/linker.cpp#1712
 */
-bool solist_drop_so_path(const char *target_path);
+bool solist_drop_so_path(void *lib_memory);
 
 /* 
   INFO: When dlopen'ing a library, the system will increment 1 to a global

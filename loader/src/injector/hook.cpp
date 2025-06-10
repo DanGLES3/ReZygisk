@@ -676,7 +676,19 @@ void ZygiskContext::run_modules_post() {
 
     if (modules.size() > 0) {
         LOGD("modules unloaded: %zu/%zu", modules_unloaded, modules.size());
-        clean_trace("/data/adb", modules.size(), modules_unloaded, true);
+
+        /* INFO: While Variable Length Arrays (VLAs) aren't usually
+                   recommended due to the ease of using too much of the
+                   stack, this should be fine since it should not be
+                   possible to exhaust the stack with only a few addresses. */
+        void *module_addrs[modules.size() * sizeof(void *)];
+
+        size_t i = 0;
+        for (const auto &m : modules) {
+            module_addrs[i++] = m.getHandle();
+        }
+
+        clean_trace("/data/adb", module_addrs, modules.size(), modules.size(), modules_unloaded, false);
     }
 }
 
@@ -866,19 +878,35 @@ static void hook_register(dev_t dev, ino_t inode, const char *symbol, void *new_
 #define PLT_HOOK_REGISTER(DEV, INODE, NAME) \
     PLT_HOOK_REGISTER_SYM(DEV, INODE, #NAME, NAME)
 
-void clean_trace(const char* path, size_t load, size_t unload, bool spoof_maps) {
+/* INFO: module_addrs_length is always the same as "load" */
+void clean_trace(const char *path, void **module_addrs, size_t module_addrs_length, size_t load, size_t unload, bool spoof_maps) {
     LOGD("cleaning trace for path %s", path);
 
     if (load > 0 || unload > 0) solist_reset_counters(load, unload);
 
     LOGD("Dropping solist record for %s", path);
 
-    bool path_found = solist_drop_so_path(path);
-    if (!path_found || !spoof_maps) return;
+    bool any_dropped = false;
+    for (size_t i = 0; i < module_addrs_length; i++) {
+        bool local_any_dropped = solist_drop_so_path(module_addrs[i]);
+        if (!local_any_dropped) continue;
+
+        any_dropped = true;
+
+        LOGD("Dropped solist record for %p", module_addrs[i]);
+    }
+
+    if (!any_dropped || !spoof_maps) return;
 
     LOGD("spoofing virtual maps for %s", path);
-    // spoofing map names is futile in Android, we do it simply
-    // to avoid Zygisk detections based on string comparison
+
+    /* INFO: Spoofing maps names is futile, after all it will
+               still show up in /proc/self/(s)maps but with a
+               different name, however still detectable by
+               checking the permissions. This, however, avoids
+               just checking for "zygisk". */
+
+    /* TODO: Use SoList to map through libraries to avoid open /proc/self/maps here */
     for (auto &map : lsplt::MapInfo::Scan()) {
         if (strstr(map.path.c_str(), path) && strstr(map.path.c_str(), "libzygisk") == 0)
         {

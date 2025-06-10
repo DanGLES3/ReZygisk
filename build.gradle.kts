@@ -38,19 +38,18 @@ val androidSourceCompatibility by extra(JavaVersion.VERSION_11)
 val androidTargetCompatibility by extra(JavaVersion.VERSION_11)
 
 tasks.register("Delete", Delete::class) {
-    delete(rootProject.buildDir)
+    delete(layout.buildDirectory.get())
 }
 
 fun Project.configureBaseExtension() {
     extensions.findByType(LibraryExtension::class)?.run {
-        namespace = "icu.nullptr.zygisk.next"
+        namespace = "com.performanc.org.rezygisk"
         compileSdk = androidCompileSdkVersion
         ndkVersion = androidCompileNdkVersion
         buildToolsVersion = androidBuildToolsVersion
 
         defaultConfig {
             minSdk = androidMinSdkVersion
-            targetSdk = androidTargetSdkVersion
         }
 
         lint {
