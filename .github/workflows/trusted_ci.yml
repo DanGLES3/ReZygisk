@@ -28,8 +28,12 @@ jobs:
           private_key: ${{ secrets.ORG_PRIVATE_KEY }}
           public_key: ${{ secrets.ORG_PUBLIC_KEY }}
         run: |
-          echo "$private_key" | base64 -d > module/private_key
-          echo "$public_key" | base64 -d > module/public_key
+          if [ -z "$private_key" ] || [ -z "$public_key" ]; then
+            echo "Private or public key is not set."
+          else
+            echo "$private_key" | base64 -d > module/private_key
+            echo "$public_key" | base64 -d > module/public_key
+          fi
 
       - name: Build with Gradle
         run: |
