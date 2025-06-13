@@ -125,6 +125,8 @@ struct ZygiskContext {
 vector<tuple<dev_t, ino_t, const char *, void **>> *plt_hook_list;
 map<string, vector<JNINativeMethod>> *jni_hook_list;
 bool should_unmap_zygisk = false;
+bool enable_unloader = false;
+bool hooked_unloader = false;
 std::vector<lsplt::MapInfo> cached_map_infos = {};
 
 } // namespace
@@ -216,6 +218,9 @@ DCL_HOOK_FUNC(int, pthread_attr_setstacksize, void *target, size_t size) {
     int res = old_pthread_attr_setstacksize((pthread_attr_t *)target, size);
     LOGV("Call pthread_attr_setstacksize in [tid, pid]: %d, %d", gettid(), getpid());
 
+    if (!enable_unloader)
+        return res;
+
     // Only perform unloading on the main thread
     if (gettid() != getpid())
         return res;
@@ -248,6 +253,27 @@ DCL_HOOK_FUNC(char *, strdup, const char *s) {
     }
 
     return old_strdup(s);
+}
+
+/*
+ * INFO: Our goal is to get called after libart.so is loaded, but before ART actually starts running.
+ * If we are too early, we won't find libart.so in maps, and if we are too late, we could make other
+ * threads crash if they try to use the PLT while we are in the process of hooking it.
+ * For this task, hooking property_get was chosen as there are lots of calls to this, so it's
+ * relatively unlikely to break.
+ *
+ * The line where libart.so is loaded is:
+ * https://github.com/aosp-mirror/platform_frameworks_base/blob/1cdfff555f4a21f71ccc978290e2e212e2f8b168/core/jni/AndroidRuntime.cpp#L1266
+ *
+ * And shortly after that, in the startVm method that is called right after, there are many calls to property_get:
+ * https://github.com/aosp-mirror/platform_frameworks_base/blob/1cdfff555f4a21f71ccc978290e2e212e2f8b168/core/jni/AndroidRuntime.cpp#L791
+ *
+ * After we succeed in getting called at a point where libart.so is already loaded, we will ignore
+ * the rest of the property_get calls.
+ */
+DCL_HOOK_FUNC(int, property_get, const char *key, char *value, const char *default_value) {
+    hook_unloader();
+    return old_property_get(key, value, default_value);
 }
 
 #undef DCL_HOOK_FUNC
@@ -850,7 +876,7 @@ ZygiskContext::~ZygiskContext() {
         m.clearApi();
     }
 
-    hook_unloader();
+    enable_unloader = true;
 }
 
 } // namespace
@@ -948,6 +974,7 @@ void hook_functions() {
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, fork);
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, unshare);
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, strdup);
+    PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, property_get);
     hook_commit();
 
     // Remove unhooked methods
@@ -958,9 +985,13 @@ void hook_functions() {
 }
 
 static void hook_unloader() {
+    if (hooked_unloader) return;
+    hooked_unloader = true;
+
     ino_t art_inode = 0;
     dev_t art_dev = 0;
 
+    cached_map_infos = lsplt::MapInfo::Scan();
     for (auto &map : cached_map_infos) {
         if (map.path.ends_with("/libart.so")) {
             art_inode = map.inode;
@@ -970,7 +1001,16 @@ static void hook_unloader() {
     }
 
     if (art_dev == 0 || art_inode == 0) {
+        /*
+         * INFO: If we are here, it means we are too early and libart.so hasn't loaded yet when
+         * property_get was called. This doesn't normally happen, but we try again next time
+         * just to be safe.
+         */
+
         LOGE("virtual map for libart.so is not cached");
+
+        hooked_unloader = false;
+
         return;
     } else {
         LOGD("hook_unloader called with libart.so [%zu:%lu]", art_dev, art_inode);

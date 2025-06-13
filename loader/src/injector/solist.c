@@ -121,7 +121,7 @@ static bool solist_init() {
   LOGD("%p is soinfo_free", (void *)soinfo_free);
 
   find_containing_library = (SoInfo *(*)(const void *))getSymbAddress(linker, "__dl__Z23find_containing_libraryPKv");
-  if (find_containing_library != NULL) {
+  if (find_containing_library == NULL) {
     LOGE("Failed to find find_containing_library __dl__Z23find_containing_libraryPKv");
 
     ElfImg_destroy(linker);
