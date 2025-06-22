@@ -357,6 +357,9 @@ void zygiskd_start(char *restrict argv[]) {
     return;
   }
 
+  struct sigaction sa = { .sa_handler = SIG_IGN };
+  sigaction(SIGPIPE, &sa, NULL);
+
   bool first_process = true;
   while (1) {
     int client_fd = accept(socket_fd, NULL, NULL);

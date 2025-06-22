@@ -62,6 +62,7 @@ void apatch_get_existence(struct root_impl_state *state) {
 }
 
 struct package_config {
+  char *process;
   uid_t uid;
   bool root_granted;
   bool umount_needed;
@@ -104,7 +105,7 @@ bool _apatch_get_package_config(struct packages_config *restrict config) {
       return false;
     }
 
-    strtok(line, ",");
+    config->configs[config->size].process = strdup(strtok(line, ","));
 
     char *exclude_str = strtok(NULL, ",");
     if (exclude_str == NULL) continue;
@@ -128,6 +129,10 @@ bool _apatch_get_package_config(struct packages_config *restrict config) {
 }
 
 void _apatch_free_package_config(struct packages_config *restrict config) {
+  for (size_t i = 0; i < config->size; i++) {
+    free(config->configs[i].process);
+  }
+
   free(config->configs);
 }
 
@@ -155,7 +160,7 @@ bool apatch_uid_granted_root(uid_t uid) {
   return false;
 }
 
-bool apatch_uid_should_umount(uid_t uid) {
+bool apatch_uid_should_umount(uid_t uid, const char *const process) {
   struct packages_config config;
   if (!_apatch_get_package_config(&config)) {
     _apatch_free_package_config(&config);
@@ -163,8 +168,22 @@ bool apatch_uid_should_umount(uid_t uid) {
     return false;
   }
 
+  /* INFO: Some can take advantage of the UID being different in an app's
+          isolated service, bypassing this check, so we must check against
+          process name in case it is an isolated service. This can happen in
+          all root implementations. */
+  size_t targeted_process_length = 0;
+  if (IS_ISOLATED_SERVICE(uid)) targeted_process_length = strlen(process);
+
   for (size_t i = 0; i < config.size; i++) {
-    if (config.configs[i].uid != uid) continue;
+    if (IS_ISOLATED_SERVICE(uid)) {
+      size_t config_process_length = strlen(config.configs[i].process);
+      size_t smallest_process_length = targeted_process_length < config_process_length ? targeted_process_length : config_process_length;
+
+      if (strncmp(config.configs[i].process, process, smallest_process_length) != 0) continue;
+    } else {
+      if (config.configs[i].uid != uid) continue;
+    }
 
     /* INFO: This allow us to copy the information to avoid use-after-free */
     bool umount_needed = config.configs[i].umount_needed;

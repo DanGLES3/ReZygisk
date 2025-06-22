@@ -121,11 +121,7 @@ void companion_entry(int fd) {
     ASSURE_SIZE_WRITE("ZygiskdCompanion", "module_entry", ret, sizeof(uint8_t));
   }
 
-  struct sigaction sa;
-  memset(&sa, 0, sizeof(sa));
-
-  sigemptyset(&sa.sa_mask);
-  sa.sa_handler = SIG_IGN;
+  struct sigaction sa = { .sa_handler = SIG_IGN };
   sigaction(SIGPIPE, &sa, NULL);
 
   while (1) {

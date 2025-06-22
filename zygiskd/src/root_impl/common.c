@@ -100,7 +100,7 @@ bool uid_should_umount(uid_t uid, const char *const process) {
       return ksu_uid_should_umount(uid);
     }
     case APatch: {
-      return apatch_uid_should_umount(uid);
+      return apatch_uid_should_umount(uid, process);
     }
     case Magisk: {
       return magisk_uid_should_umount(process);

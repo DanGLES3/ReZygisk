@@ -65,6 +65,9 @@
     return -1;                                                                                                   \
   }
 
+#define IS_ISOLATED_SERVICE(uid)      \
+  ((uid) >= 90000 && (uid) < 1000000)
+
 #define write_func_def(type)              \
   ssize_t write_## type(int fd, type val)
 
