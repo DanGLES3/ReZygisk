@@ -168,22 +168,8 @@ bool apatch_uid_should_umount(uid_t uid, const char *const process) {
     return false;
   }
 
-  /* INFO: Some can take advantage of the UID being different in an app's
-          isolated service, bypassing this check, so we must check against
-          process name in case it is an isolated service. This can happen in
-          all root implementations. */
-  size_t targeted_process_length = 0;
-  if (IS_ISOLATED_SERVICE(uid)) targeted_process_length = strlen(process);
-
   for (size_t i = 0; i < config.size; i++) {
-    if (IS_ISOLATED_SERVICE(uid)) {
-      size_t config_process_length = strlen(config.configs[i].process);
-      size_t smallest_process_length = targeted_process_length < config_process_length ? targeted_process_length : config_process_length;
-
-      if (strncmp(config.configs[i].process, process, smallest_process_length) != 0) continue;
-    } else {
-      if (config.configs[i].uid != uid) continue;
-    }
+    if (config.configs[i].uid != uid) continue;
 
     /* INFO: This allow us to copy the information to avoid use-after-free */
     bool umount_needed = config.configs[i].umount_needed;
@@ -191,6 +177,29 @@ bool apatch_uid_should_umount(uid_t uid, const char *const process) {
     _apatch_free_package_config(&config);
 
     return umount_needed;
+  }
+
+  /* INFO: Isolated services have different UIDs than the main app, and
+             while libzygisk.so has code to send the UID of the app related
+             to the isolated service, we add this so that in case it fails,
+             this should avoid it pass through as Mounted.
+  */
+  if (IS_ISOLATED_SERVICE(uid)) {
+    size_t targeted_process_length = strlen(process);
+
+    for (size_t i = 0; i < config.size; i++) {
+      size_t config_process_length = strlen(config.configs[i].process);
+      size_t smallest_process_length = targeted_process_length < config_process_length ? targeted_process_length : config_process_length;
+
+      if (strncmp(config.configs[i].process, process, smallest_process_length) != 0) continue;
+
+      /* INFO: This allow us to copy the information to avoid use-after-free */
+      bool umount_needed = config.configs[i].umount_needed;
+
+      _apatch_free_package_config(&config);
+
+      return umount_needed;
+    }
   }
 
   _apatch_free_package_config(&config);

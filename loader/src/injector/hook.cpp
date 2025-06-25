@@ -722,7 +722,48 @@ void ZygiskContext::run_modules_post() {
 void ZygiskContext::app_specialize_pre() {
     flags[APP_SPECIALIZE] = true;
 
-    info_flags = rezygiskd_get_process_flags(g_ctx->args.app->uid, (const char *const)process);
+    /* INFO: Isolated services have different UIDs than the main apps. Because
+               numerous root implementations base themselves in the UID of the
+               app, we need to ensure that the UID sent to ReZygiskd to search
+               is the app's and not the isolated service, or else it will be
+               able to bypass DenyList.
+
+             All apps, and isolated processes, of *third-party* applications will
+               have their app_data_dir set. The system applications might not have
+               one, however it is unlikely they will create an isolated process,
+               and even if so, it should not impact in detections, performance or
+               any area.
+    */
+    uid_t uid = args.app->uid;
+    if (IS_ISOLATED_SERVICE(uid) && args.app->app_data_dir) {
+        /* INFO: If the app is an isolated service, we use the UID of the
+                   app's process data directory, which is the UID of the
+                   app itself, which root implementations actually use.
+        */
+        const char *data_dir = env->GetStringUTFChars(args.app->app_data_dir, NULL);
+        if (!data_dir) {
+            LOGE("Failed to get app data directory");
+
+            return;
+        }
+
+        struct stat st;
+        if (stat(data_dir, &st) == -1) {
+            PLOGE("Failed to stat app data directory [%s]", data_dir);
+
+            env->ReleaseStringUTFChars(args.app->app_data_dir, data_dir);
+
+            return;
+        }
+
+        uid = st.st_uid;
+
+        LOGD("Isolated service being related to UID %d, app data dir: %s", uid, data_dir);
+
+        env->ReleaseStringUTFChars(args.app->app_data_dir, data_dir);
+    }
+
+    info_flags = rezygiskd_get_process_flags(uid, (const char *const)process);
      if (info_flags & PROCESS_IS_FIRST_STARTED) {
         /* INFO: To ensure we are really using a clean mount namespace, we use
                    the first process it as reference for clean mount namespace,

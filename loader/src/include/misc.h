@@ -4,6 +4,9 @@
 extern "C" {
 #endif /* __cplusplus */
 
+#define IS_ISOLATED_SERVICE(uid)      \
+  ((uid) >= 90000 && (uid) < 1000000)
+
 /*
  * Bionic's atoi runs through strtol().
  * Use our own implementation for faster conversion.
