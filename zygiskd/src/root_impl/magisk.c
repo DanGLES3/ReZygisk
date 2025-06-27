@@ -74,7 +74,7 @@ void magisk_get_existence(struct root_impl_state *state) {
     return;
   }
 
-  state->variant = (uint8_t)Kitsune;
+  state->variant = (uint8_t)Official;
   variant = Kitsune;
 
   argv[1] = "-V";
