@@ -74,16 +74,8 @@ void magisk_get_existence(struct root_impl_state *state) {
     return;
   }
 
-  state->variant = (uint8_t)MOfficial;
-
-  for (unsigned long i = 0; i < sizeof(supported_variants) / sizeof(supported_variants[0]); i++) {
-    if (strstr(magisk_info, supported_variants[i])) {
-      variant = (enum magisk_variants)(i + 1);
-      state->variant = (uint8_t)variant;
-
-      break;
-    }
-  }
+  state->variant = (uint8_t)MKitsune;
+  variant = MKitsune;
 
   argv[1] = "-V";
 
