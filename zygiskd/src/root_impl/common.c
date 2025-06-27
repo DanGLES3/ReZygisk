@@ -30,6 +30,7 @@ void root_impls_setup(void) {
     impl.impl = Multiple;
   } else if (state_ksu.state == Supported) {
     impl.impl = KernelSU;
+    impl.variant = state_ksu.variant;
   } else if (state_apatch.state == Supported) {
     impl.impl = APatch;
   } else if (state_magisk.state == Supported) {

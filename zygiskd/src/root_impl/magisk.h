@@ -4,8 +4,8 @@
 #include "../constants.h"
 
 enum magisk_variants {
-  Official,
-  Kitsune
+  MOfficial,
+  MKitsune
 };
 
 void magisk_get_existence(struct root_impl_state *state);

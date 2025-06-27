@@ -20,6 +20,7 @@
 
 #include "utils.h"
 #include "root_impl/common.h"
+#include "root_impl/kernelsu.h"
 #include "root_impl/magisk.h"
 
 int clean_namespace_fd = 0;
@@ -436,7 +437,8 @@ void stringify_root_impl_name(struct root_impl impl, char *restrict output) {
       break;
     }
     case KernelSU: {
-      strcpy(output, "KernelSU");
+      if (impl.variant == KOfficial) strcpy(output, "KernelSU");
+      else strcpy(output, "KernelSU Next");
 
       break;
     }
@@ -446,11 +448,8 @@ void stringify_root_impl_name(struct root_impl impl, char *restrict output) {
       break;
     }
     case Magisk: {
-      if (impl.variant == 0) {
-        strcpy(output, "Magisk Official");
-      } else {
-        strcpy(output, "Magisk Kitsune");
-      }
+      if (impl.variant == MOfficial) strcpy(output, "Magisk Official");
+      else strcpy(output, "Magisk Kitsune");
 
       break;
     }
@@ -786,7 +785,7 @@ int save_mns_fd(int pid, enum MountNamespaceState mns_state, struct root_impl im
     return -1;
   }
 
-  if (impl.impl == Magisk && impl.variant == Kitsune && mns_state == Clean) {
+  if (impl.impl == Magisk && impl.variant == MKitsune && mns_state == Clean) {
     LOGI("[Magisk] Magisk Kitsune detected, will skip cache first.");
 
     /* INFO: MagiskSU of Kitsune has a special behavior: It is only mounted

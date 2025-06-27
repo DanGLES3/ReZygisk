@@ -19,6 +19,9 @@
 #define CMD_GET_VERSION 2
 #define CMD_UID_GRANTED_ROOT 12
 #define CMD_UID_SHOULD_UMOUNT 13
+#define CMD_HOOK_MODE 16
+
+static enum kernelsu_variants variant = KOfficial;
 
 void ksu_get_existence(struct root_impl_state *state) {
   int version = 0;
@@ -42,6 +45,15 @@ void ksu_get_existence(struct root_impl_state *state) {
     }
 
     state->state = Supported;
+
+    char mode[16] = { 0 };
+    prctl((signed int)KERNEL_SU_OPTION, CMD_HOOK_MODE, mode, 0, 0);
+
+    if (mode[0] != '\0') state->variant = KNext;
+    else state->variant = KOfficial;
+
+    state->variant = KNext;
+    variant = state->variant;
   }
   else if (version >= 1 && version <= MIN_KSU_VERSION - 1) state->state = TooOld;
   else state->state = Abnormal;
@@ -68,8 +80,12 @@ bool ksu_uid_should_umount(uid_t uid) {
 }
 
 bool ksu_uid_is_manager(uid_t uid) {
+  const char *manager_path = NULL;
+  if (variant == KOfficial) manager_path = "/data/user_de/0/me.weishu.kernelsu";
+  else if (variant == KNext) manager_path = "/data/user_de/0/com.rifsxd.ksunext";
+
   struct stat s;
-  if (stat("/data/user_de/0/me.weishu.kernelsu", &s) == -1) {
+  if (stat(manager_path, &s) == -1) {
     if (errno != ENOENT) {
       LOGE("Failed to stat KSU manager data directory: %s\n", strerror(errno));
     }
