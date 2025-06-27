@@ -145,7 +145,7 @@ bool magisk_uid_should_umount(const char *const process) {
   if (is_using_sulist)
     snprintf(sqlite_cmd, sizeof(sqlite_cmd), "SELECT 1 FROM sulist WHERE process=\"%s\" LIMIT 1", process);
   else
-    snprintf(sqlite_cmd, sizeof(sqlite_cmd), "SELECT 1 FROM denylist WHERE process=\"%s\" LIMIT 1", process);
+    snprintf(sqlite_cmd, sizeof(sqlite_cmd), "SELECT 1 FROM hidelist WHERE process=\"%s\" LIMIT 1", process);
 
   char *const argv[] = { "magisk", "--sqlite", sqlite_cmd, NULL };
 
