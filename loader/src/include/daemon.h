@@ -81,7 +81,7 @@ void rezygiskd_zygote_restart();
 
 void rezygiskd_system_server_started();
 
-bool rezygiskd_update_mns(enum mount_namespace_state nms_state, char *buf, size_t buf_size);
+bool rezygiskd_update_mns(enum mount_namespace_state nms_state, bool force_update, char *buf, size_t buf_size);
 
 #ifdef __cplusplus
 }

@@ -315,7 +315,7 @@ void rezygiskd_system_server_started() {
   close(fd);
 }
 
-bool rezygiskd_update_mns(enum mount_namespace_state nms_state, char *buf, size_t buf_size) {
+bool rezygiskd_update_mns(enum mount_namespace_state nms_state, bool force_update, char *buf, size_t buf_size) {
   int fd = rezygiskd_connect(1);
   if (fd == -1) {
     PLOGE("connection to ReZygiskd");
@@ -326,6 +326,7 @@ bool rezygiskd_update_mns(enum mount_namespace_state nms_state, char *buf, size_
   write_uint8_t(fd, (uint8_t)UpdateMountNamespace);
   write_uint32_t(fd, (uint32_t)getpid());
   write_uint8_t(fd, (uint8_t)nms_state);
+  write_uint8_t(fd, (uint8_t)force_update);
 
   uint32_t target_pid = 0;
   if (read_uint32_t(fd, &target_pid) < 0) {

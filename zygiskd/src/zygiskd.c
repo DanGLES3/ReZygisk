@@ -668,10 +668,14 @@ void zygiskd_start(char *restrict argv[]) {
         ret = write_uint32_t(client_fd, our_pid);
         ASSURE_SIZE_WRITE_BREAK("UpdateMountNamespace", "our_pid", ret, sizeof(our_pid));
 
-        if ((enum MountNamespaceState)mns_state == Clean)
-          save_mns_fd(pid, Mounted, impl);
+        bool force_update = false;
+        ret = read_uint8_t(client_fd, (uint8_t *)&force_update);
+        ASSURE_SIZE_READ_BREAK("UpdateMountNamespace", "force_update", ret, sizeof(force_update));
 
-        int ns_fd = save_mns_fd(pid, (enum MountNamespaceState)mns_state, impl);
+        if ((enum MountNamespaceState)mns_state == Clean)
+          save_mns_fd(pid, Mounted, force_update, impl);
+
+        int ns_fd = save_mns_fd(pid, (enum MountNamespaceState)mns_state, force_update, impl);
         if (ns_fd == -1) {
           LOGE("Failed to save mount namespace fd for pid %d: %s\n", pid, strerror(errno));
 
