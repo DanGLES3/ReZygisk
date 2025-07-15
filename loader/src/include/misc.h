@@ -1,4 +1,5 @@
 #ifndef MISC_H
+#define MISC_H
 
 #ifdef __cplusplus
 extern "C" {
