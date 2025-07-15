@@ -717,7 +717,7 @@ void ZygiskContext::run_modules_post() {
             module_addrs[i++] = m.getEntry();
         }
 
-        clean_trace("/data/adb", module_addrs, modules.size(), modules.size(), modules_unloaded, true);
+        clean_trace("/data/adb", module_addrs, modules.size(), modules.size(), modules_unloaded);
     }
 }
 
@@ -971,52 +971,18 @@ static void hook_register(dev_t dev, ino_t inode, const char *symbol, void *new_
     PLT_HOOK_REGISTER_SYM(DEV, INODE, #NAME, NAME)
 
 /* INFO: module_addrs_length is always the same as "load" */
-void clean_trace(const char *path, void **module_addrs, size_t module_addrs_length, size_t load, size_t unload, bool spoof_maps) {
+void clean_trace(const char *path, void **module_addrs, size_t module_addrs_length, size_t load, size_t unload) {
     LOGD("cleaning trace for path %s", path);
 
     if (load > 0 || unload > 0) solist_reset_counters(load, unload);
 
     LOGD("Dropping solist record for %s", path);
 
-    bool any_dropped = false;
     for (size_t i = 0; i < module_addrs_length; i++) {
-        bool local_any_dropped = solist_drop_so_path(module_addrs[i]);
-        if (!local_any_dropped) continue;
-
-        any_dropped = true;
+        bool has_dropped = solist_drop_so_path(module_addrs[i]);
+        if (!has_dropped) continue;
 
         LOGD("Dropped solist record for %p", module_addrs[i]);
-    }
-
-    if (!any_dropped || !spoof_maps) return;
-
-    LOGD("spoofing virtual maps for %s", path);
-
-    /* INFO: Spoofing maps names is futile, after all it will
-               still show up in /proc/self/(s)maps but with a
-               different name, however still detectable by
-               checking the permissions. This, however, avoids
-               just checking for "zygisk". */
-
-    /* TODO: Use SoList to map through libraries to avoid open /proc/self/maps here */
-    for (auto &map : lsplt::MapInfo::Scan()) {
-        if (strstr(map.path.c_str(), path) && strstr(map.path.c_str(), "libzygisk") == 0)
-        {
-            void *addr = (void *)map.start;
-            size_t size = map.end - map.start;
-            void *copy = mmap(nullptr, size, PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
-            if (copy == MAP_FAILED) {
-                LOGE("failed to backup block %s [%p, %p]", map.path.c_str(), addr, (void*)map.end);
-                continue;
-            }
-
-            if ((map.perms & PROT_READ) == 0) {
-                mprotect(addr, size, PROT_READ);
-            }
-            memcpy(copy, addr, size);
-            mprotect(copy, size, map.perms);
-            mremap(copy, size, size, MREMAP_MAYMOVE | MREMAP_FIXED, addr);
-        }
     }
 }
 

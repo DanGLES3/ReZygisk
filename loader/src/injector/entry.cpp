@@ -24,6 +24,6 @@ void entry(void* addr, size_t size, const char* path) {
     hook_functions();
 
     void *module_addrs[1] = { addr };
-    clean_trace(path, module_addrs, 1, 1, 0, false);
+    clean_trace(path, module_addrs, 1, 1, 0);
     send_seccomp_event();
 }
