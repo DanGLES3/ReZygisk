@@ -112,7 +112,8 @@ mkdir "$MODPATH/webroot"
 ui_print "- Extracting webroot"
 unzip -o "$ZIPFILE" "webroot/*" -x "*.sha256" -d "$MODPATH"
 
-CPU_ABIS=$(getprop ro.product.cpu.abilist)
+CPU_ABIS=$(getprop ro.system.product.cpu.abilist)
+CPU_ABIS=${CPU_ABIS:-$(getprop ro.product.cpu.abilist)}
 
 SUPPORTS_32BIT=false
 SUPPORTS_64BIT=false

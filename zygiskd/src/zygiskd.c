@@ -48,8 +48,11 @@ enum Architecture {
 #define ZYGISKD_PATH "/data/adb/modules/rezygisk/bin/zygiskd" lp_select("32", "64")
 
 static enum Architecture get_arch(void) {
-  char system_arch[64];
-  get_property("ro.product.cpu.abilist", system_arch);
+  char system_arch[64] = { 0 };
+  get_property("ro.system.product.cpu.abilist", system_arch);
+
+  if (system_arch[0] == '\0')
+    get_property("ro.product.cpu.abilist", system_arch);
 
   /* INFO: "PC" architectures should have priority because in an emulator
              the native architecture should have priority over the emulated

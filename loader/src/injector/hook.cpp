@@ -138,7 +138,10 @@ namespace {
 ret (*old_##func)(__VA_ARGS__);       \
 ret new_##func(__VA_ARGS__)
 
-// Skip actual fork and return cached result if applicable
+/* INFO: ReZygisk already performs a fork in ZygiskContext::fork_pre, because of that,
+           we avoid duplicate fork in nativeForkAndSpecialize and nativeForkSystemServer
+           by caching the pid in fork_pre function and only performing fork if the pid
+           is non-0, or in other words, if we (libzygisk.so) already forked. */
 DCL_HOOK_FUNC(int, fork) {
     return (g_ctx && g_ctx->pid >= 0) ? g_ctx->pid : old_fork();
 }
@@ -176,6 +179,52 @@ bool update_mnt_ns(enum mount_namespace_state mns_state, bool force_update, bool
     close(updated_ns);
 
     return true;
+}
+struct FileDescriptorInfo {
+    const int fd;
+    const struct stat stat;
+    const std::string file_path;
+    const int open_flags;
+    const int fd_flags;
+    const int fs_flags;
+    const off_t offset;
+    const bool is_sock;
+};
+
+/* INFO: This hook avoids that umounted overlays made by root modules lead to Zygote
+           to Abort its operation as it cannot open anymore.
+
+   SOURCES:
+     - https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-14.0.0_r1/core/jni/fd_utils.cpp#346
+     - https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-14.0.0_r1/core/jni/fd_utils.cpp#544
+     - https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-14.0.0_r1/core/jni/com_android_internal_os_Zygote.cpp#2329
+*/
+DCL_HOOK_FUNC(void, _ZNK18FileDescriptorInfo14ReopenOrDetachERKNSt3__18functionIFvNS0_12basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEEEEE, void *_this, void *fail_fn) {
+    const int fd = *(const int *)((uintptr_t)_this + offsetof(FileDescriptorInfo, fd));
+    const std::string *file_path = (const std::string *)((uintptr_t)_this + offsetof(FileDescriptorInfo, file_path));
+    const int open_flags = *(const int *)((uintptr_t)_this + offsetof(FileDescriptorInfo, open_flags));
+    const bool is_sock = *(const bool *)((uintptr_t)_this + offsetof(FileDescriptorInfo, is_sock));
+
+    int new_fd;
+
+    if (is_sock)
+        goto bypass_fd_check;
+
+    if (strncmp(file_path->c_str(), "/memfd:/boot-image-methods.art", strlen("/memfd:/boot-image-methods.art")) == 0)
+        goto bypass_fd_check;
+
+    new_fd = TEMP_FAILURE_RETRY(open(file_path->c_str(), open_flags));
+    close(new_fd);
+    if (new_fd == -1) {
+        LOGD("Failed to open file %s, detaching it", file_path->c_str());
+
+        close(fd);
+
+        return;
+    }
+
+    bypass_fd_check:
+        old__ZNK18FileDescriptorInfo14ReopenOrDetachERKNSt3__18functionIFvNS0_12basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEEEEE(_this, fail_fn);
 }
 
 // We cannot directly call `dlclose` to unload ourselves, otherwise when `dlclose` returns,
@@ -900,8 +949,10 @@ void ZygiskContext::nativeForkAndSpecialize_pre() {
     flags[APP_FORK_AND_SPECIALIZE] = true;
 
     fork_pre();
-    if (pid == 0)
-        app_specialize_pre();
+    if (!is_child())
+        return;
+
+    app_specialize_pre();
 
     sanitize_fds();
 }
@@ -1008,6 +1059,7 @@ void hook_functions() {
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, property_get);
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, setmntent);
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, endmntent);
+    PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, _ZNK18FileDescriptorInfo14ReopenOrDetachERKNSt3__18functionIFvNS0_12basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEEEEE);
     hook_commit();
 
     // Remove unhooked methods
