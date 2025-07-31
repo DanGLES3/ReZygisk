@@ -7,7 +7,7 @@
 #include <array>
 #include <vector>
 
-#include <lsplt.hpp>
+#include <lsplt.h>
 
 #include <fcntl.h>
 #include <dirent.h>
@@ -127,7 +127,6 @@ map<string, vector<JNINativeMethod>> *jni_hook_list;
 bool should_unmap_zygisk = false;
 bool enable_unloader = false;
 bool hooked_unloader = false;
-std::vector<lsplt::MapInfo> cached_map_infos = {};
 
 } // namespace
 
@@ -242,7 +241,8 @@ DCL_HOOK_FUNC(int, pthread_attr_setstacksize, void *target, size_t size) {
 
     if (should_unmap_zygisk) {
         unhook_functions();
-        cached_map_infos.clear();
+
+        lsplt_free_resources();
 
         if (should_unmap_zygisk) {
             // Because both `pthread_attr_setstacksize` and `dlclose` have the same function signature,
@@ -263,8 +263,6 @@ DCL_HOOK_FUNC(char *, strdup, const char *s) {
   if (strcmp(s, "com.android.internal.os.ZygoteInit") == 0) {
       LOGV("strdup %s", s);
       initialize_jni_hook();
-      cached_map_infos = lsplt::MapInfo::Scan();
-      LOGD("cached_map_infos updated");
     }
 
     return old_strdup(s);
@@ -349,17 +347,29 @@ void initialize_jni_hook() {
     auto get_created_java_vms = reinterpret_cast<jint (*)(JavaVM **, jsize, jsize *)>(
             dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
     if (!get_created_java_vms) {
-        for (auto &map: cached_map_infos) {
-            if (!map.path.ends_with("/libnativehelper.so")) continue;
-            void *h = dlopen(map.path.data(), RTLD_LAZY);
+        struct lsplt_map_info *map_infos = lsplt_scan_maps("self");
+        if (!map_infos) {
+            LOGE("Failed to scan maps for self");
+
+            return;
+        }
+
+        for (size_t i = 0; i < map_infos->length; i++) {
+            struct lsplt_map_entry map = map_infos->maps[i];
+
+            if (!strstr(map.path, "/libnativehelper.so")) continue;
+            void *h = dlopen(map.path, RTLD_LAZY);
             if (!h) {
-                LOGW("cannot dlopen libnativehelper.so: %s", dlerror());
+                LOGW("cannot dlopen libart.so: %s", dlerror());
                 break;
             }
             get_created_java_vms = reinterpret_cast<decltype(get_created_java_vms)>(dlsym(h, "JNI_GetCreatedJavaVMs"));
             dlclose(h);
             break;
         }
+
+        lsplt_free_maps(map_infos);
+
         if (!get_created_java_vms) {
             LOGW("JNI_GetCreatedJavaVMs not found");
             return;
@@ -430,11 +440,11 @@ bool ZygiskModule::RegisterModuleImpl(ApiTable *api, long *module) {
         api->v2.getFlags = [](auto) { return ZygiskModule::getFlags(); };
     }
     if (api_version >= 4) {
-        api->v4.pltHookCommit = []() { return lsplt::CommitHook(cached_map_infos); };
+        api->v4.pltHookCommit = []() { return lsplt_commit_hook(); };
         api->v4.pltHookRegister = [](dev_t dev, ino_t inode, const char *symbol, void *fn, void **backup) {
             if (dev == 0 || inode == 0 || symbol == nullptr || fn == nullptr)
                 return;
-            lsplt::RegisterHook(dev, inode, symbol, fn, backup);
+            lsplt_register_hook(dev, inode, symbol, fn, backup);
         };
         api->v4.exemptFd = [](int fd) { return g_ctx && g_ctx->exempt_fd(fd); };
     }
@@ -466,14 +476,24 @@ void ZygiskContext::plt_hook_exclude(const char *regex, const char *symbol) {
 void ZygiskContext::plt_hook_process_regex() {
     if (register_info.empty())
         return;
-    for (auto &map : cached_map_infos) {
+
+    struct lsplt_map_info *map_infos = lsplt_scan_maps("self");
+    if (!map_infos) {
+        LOGE("Failed to scan maps for self");
+
+        return;
+    }
+
+    for (size_t i = 0; i < map_infos->length; i++) {
+        struct lsplt_map_entry map = map_infos->maps[i];
+
         if (map.offset != 0 || !map.is_private || !(map.perms & PROT_READ)) continue;
         for (auto &reg: register_info) {
-            if (regexec(&reg.regex, map.path.data(), 0, nullptr, 0) != 0)
+            if (regexec(&reg.regex, map.path, 0, nullptr, 0) != 0)
                 continue;
             bool ignored = false;
             for (auto &ign: ignore_info) {
-                if (regexec(&ign.regex, map.path.data(), 0, nullptr, 0) != 0)
+                if (regexec(&ign.regex, map.path, 0, nullptr, 0) != 0)
                     continue;
                 if (ign.symbol.empty() || ign.symbol == reg.symbol) {
                     ignored = true;
@@ -481,10 +501,12 @@ void ZygiskContext::plt_hook_process_regex() {
                 }
             }
             if (!ignored) {
-                lsplt::RegisterHook(map.dev, map.inode, reg.symbol, reg.callback, reg.backup);
+                lsplt_register_hook(map.dev, map.inode, reg.symbol.c_str(), reg.callback, reg.backup);
             }
         }
     }
+
+    lsplt_free_maps(map_infos);
 }
 
 bool ZygiskContext::plt_hook_commit() {
@@ -496,7 +518,7 @@ bool ZygiskContext::plt_hook_commit() {
         pthread_mutex_unlock(&hook_info_lock);
     }
 
-    return lsplt::CommitHook(cached_map_infos);
+    return lsplt_commit_hook();
 }
 
 
@@ -961,8 +983,8 @@ ZygiskContext::~ZygiskContext() {
 
 } // namespace
 
-static bool hook_commit(std::vector<lsplt::MapInfo> &map_infos = cached_map_infos) {
-    if (lsplt::CommitHook(map_infos)) {
+static bool hook_commit(struct lsplt_map_info *map_infos) {
+    if (map_infos ? lsplt_commit_hook_manual(map_infos) : lsplt_commit_hook()) {
         return true;
     } else {
         LOGE("plt_hook failed");
@@ -971,7 +993,7 @@ static bool hook_commit(std::vector<lsplt::MapInfo> &map_infos = cached_map_info
 }
 
 static void hook_register(dev_t dev, ino_t inode, const char *symbol, void *new_func, void **old_func) {
-    if (!lsplt::RegisterHook(dev, inode, symbol, new_func, old_func)) {
+    if (!lsplt_register_hook(dev, inode, symbol, new_func, old_func)) {
         LOGE("Failed to register plt_hook \"%s\"", symbol);
         return;
     }
@@ -1007,21 +1029,33 @@ void hook_functions() {
     ino_t android_runtime_inode = 0;
     dev_t android_runtime_dev = 0;
 
-    cached_map_infos = lsplt::MapInfo::Scan();
-    for (auto &map : cached_map_infos) {
-        if (map.path.ends_with("libandroid_runtime.so")) {
-            android_runtime_inode = map.inode;
-            android_runtime_dev = map.dev;
+    struct lsplt_map_info *map_infos = lsplt_scan_maps("self");
+    if (!map_infos) {
+        LOGE("Failed to scan maps for self");
 
-            break;
-        }
+        return;
+    }
+
+    for (size_t i = 0; i < map_infos->length; i++) {
+        struct lsplt_map_entry map = map_infos->maps[i];
+
+        if (!strstr(map.path, "libandroid_runtime.so")) continue;
+
+        android_runtime_inode = map.inode;
+        android_runtime_dev = map.dev;
+
+        LOGD("Found libandroid_runtime.so at [%zu:%lu]", android_runtime_dev, android_runtime_inode);
+
+        break;
     }
 
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, fork);
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, strdup);
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, property_get);
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, _ZNK18FileDescriptorInfo14ReopenOrDetachERKNSt3__18functionIFvNS0_12basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEEEEE);
-    hook_commit();
+    hook_commit(map_infos);
+
+    lsplt_free_maps(map_infos);
 
     // Remove unhooked methods
     plt_hook_list->erase(
@@ -1037,11 +1071,22 @@ static void hook_unloader() {
     ino_t art_inode = 0;
     dev_t art_dev = 0;
 
-    cached_map_infos = lsplt::MapInfo::Scan();
-    for (auto &map : cached_map_infos) {
-        if (map.path.ends_with("/libart.so")) {
+    struct lsplt_map_info *map_infos = lsplt_scan_maps("self");
+    if (!map_infos) {
+        LOGE("Failed to scan maps for self");
+
+        return;
+    }
+
+    for (size_t i = 0; i < map_infos->length; i++) {
+        struct lsplt_map_entry map = map_infos->maps[i];
+
+        if (strstr(map.path, "/libart.so") != nullptr) {
             art_inode = map.inode;
             art_dev = map.dev;
+
+            LOGD("Found libart.so at [%zu:%lu]", art_dev, art_inode);
+
             break;
         }
     }
@@ -1056,24 +1101,25 @@ static void hook_unloader() {
         LOGE("virtual map for libart.so is not cached");
 
         hooked_unloader = false;
-
-        return;
     } else {
         LOGD("hook_unloader called with libart.so [%zu:%lu]", art_dev, art_inode);
+
+        PLT_HOOK_REGISTER(art_dev, art_inode, pthread_attr_setstacksize);
+        hook_commit(map_infos);
     }
-    PLT_HOOK_REGISTER(art_dev, art_inode, pthread_attr_setstacksize);
-    hook_commit();
+
+    lsplt_free_maps(map_infos);
 }
 
 static void unhook_functions() {
     // Unhook plt_hook
     for (const auto &[dev, inode, sym, old_func] : *plt_hook_list) {
-        if (!lsplt::RegisterHook(dev, inode, sym, *old_func, nullptr)) {
+        if (!lsplt_register_hook(dev, inode, sym, *old_func, NULL)) {
             LOGE("Failed to register plt_hook [%s]", sym);
         }
     }
     delete plt_hook_list;
-    if (!hook_commit()) {
+    if (!hook_commit(NULL)) {
         LOGE("Failed to restore plt_hook");
         should_unmap_zygisk = false;
     }

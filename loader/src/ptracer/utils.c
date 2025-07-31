@@ -558,7 +558,15 @@ void wait_for_trace(int pid, int *status, int flags) {
       exit(1);
     }
 
-    if (*status >> 8 == (SIGTRAP | (PTRACE_EVENT_SECCOMP << 8))) {
+    /* INFO: We'll fork there. This will signal SIGCHLD. We just ignore and continue
+               to avoid blocking/not continuing. */
+    if (WSTOPSIG(*status) == SIGCHLD) {
+      LOGI("process %d stopped by SIGCHLD, continue", pid);
+
+      ptrace(PTRACE_CONT, pid, 0, 0);
+
+      continue;
+    } else if (*status >> 8 == (SIGTRAP | (PTRACE_EVENT_SECCOMP << 8))) {
       tracee_skip_syscall(pid);
 
       ptrace(PTRACE_CONT, pid, 0, 0);
