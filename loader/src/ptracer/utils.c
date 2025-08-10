@@ -119,8 +119,8 @@ struct maps *parse_maps(const char *filename) {
       path_offset++;
     }
 
-    maps->maps = (struct map *)realloc(maps->maps, (i + 1) * sizeof(struct map));
-    if (!maps->maps) {
+    struct map *tmp_maps = (struct map *)realloc(maps->maps, (i + 1) * sizeof(struct map));
+    if (!tmp_maps) {
       LOGE("Failed to allocate memory for maps->maps");
 
       maps->size = i;
@@ -130,6 +130,7 @@ struct maps *parse_maps(const char *filename) {
 
       return NULL;
     }
+    maps->maps = tmp_maps;
 
     maps->maps[i].start = addr_start;
     maps->maps[i].end = addr_end;

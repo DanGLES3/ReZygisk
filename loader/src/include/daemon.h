@@ -42,7 +42,7 @@ enum root_impl {
 };
 
 struct rezygisk_info {
-  struct zygisk_modules *modules;
+  struct zygisk_modules modules;
   enum root_impl root_impl;
   pid_t pid;
   bool running;

@@ -108,43 +108,32 @@ void rezygiskd_get_info(struct rezygisk_info *info) {
 
   read_uint32_t(fd, (uint32_t *)&info->pid);
 
-  read_size_t(fd, &info->modules->modules_count);
-  if (info->modules->modules_count == 0) {
-    info->modules->modules = NULL;
+  read_size_t(fd, &info->modules.modules_count);
+  if (info->modules.modules_count == 0) {
+    info->modules.modules = NULL;
 
     close(fd);
 
     return;
   }
 
-  info->modules->modules = (char **)malloc(sizeof(char *) * info->modules->modules_count);
-  if (info->modules->modules == NULL) {
+  info->modules.modules = (char **)malloc(sizeof(char *) * info->modules.modules_count);
+  if (!info->modules.modules) {
     PLOGE("allocating modules name memory");
 
-    free(info->modules);
-    info->modules = NULL;
-    info->modules->modules_count = 0;
+    info->modules.modules_count = 0;
 
     close(fd);
 
     return;
   }
 
-  for (size_t i = 0; i < info->modules->modules_count; i++) {
+  for (size_t i = 0; i < info->modules.modules_count; i++) {
     char *module_name = read_string(fd);
     if (module_name == NULL) {
       PLOGE("reading module name");
 
-      info->modules->modules_count = i;
-
-      free_rezygisk_info(info);
-
-      info->modules = NULL;
-      info->modules->modules_count = 0;
-
-      close(fd);
-
-      return;
+      goto info_cleanup;
     }
 
     char module_path[PATH_MAX];
@@ -156,43 +145,49 @@ void rezygiskd_get_info(struct rezygisk_info *info) {
     if (!module_prop) {
       PLOGE("failed to open module prop file %s", module_path);
 
-      info->modules->modules_count = i;
-
-      free_rezygisk_info(info);
-
-      info->modules = NULL;
-      info->modules->modules_count = 0;
-
-      close(fd);
-
-      return;
+      goto info_cleanup;
     }
+
+    info->modules.modules[i] = NULL;
 
     char line[1024];
     while (fgets(line, sizeof(line), module_prop) != NULL) {
       if (strncmp(line, "name=", strlen("name=")) != 0) continue;
 
-      info->modules->modules[i] = strndup(line + 5, strlen(line) - 6);
+      info->modules.modules[i] = strndup(line + 5, strlen(line) - 6);
 
       break;
     }
 
+    if (info->modules.modules[i] == NULL) {
+      PLOGE("failed to read module name from %s", module_path);
+
+      fclose(module_prop);
+
+      goto info_cleanup;
+    }
+
     fclose(module_prop);
+
+    continue;
+
+    info_cleanup:
+      info->modules.modules_count = i;
+      free_rezygisk_info(info);
+
+      break;
   }
 
   close(fd);
 }
 
 void free_rezygisk_info(struct rezygisk_info *info) {
-  if (info->modules->modules) {
-    for (size_t i = 0; i < info->modules->modules_count; i++) {
-      free(info->modules->modules[i]);
-    }
-
-    free(info->modules->modules);
+  for (size_t i = 0; i < info->modules.modules_count; i++) {
+    free(info->modules.modules[i]);
   }
 
-  free(info->modules);
+  free(info->modules.modules);
+  info->modules.modules = NULL;
 }
 
 bool rezygiskd_read_modules(struct zygisk_modules *modules) {
@@ -237,13 +232,11 @@ bool rezygiskd_read_modules(struct zygisk_modules *modules) {
 }
 
 void free_modules(struct zygisk_modules *modules) {
-  if (modules->modules) {
-    for (size_t i = 0; i < modules->modules_count; i++) {
-      free(modules->modules[i]);
-    }
-
-    free(modules->modules);
+  for (size_t i = 0; i < modules->modules_count; i++) {
+    free(modules->modules[i]);
   }
+
+  free(modules->modules);
 }
 
 int rezygiskd_connect_companion(size_t index) {

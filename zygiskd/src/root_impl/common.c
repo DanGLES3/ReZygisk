@@ -74,8 +74,7 @@ void root_impls_setup(void) {
 }
 
 void get_impl(struct root_impl *uimpl) {
-  uimpl->impl = impl.impl;
-  uimpl->variant = impl.variant;
+  *uimpl = impl;
 }
 
 bool uid_granted_root(uid_t uid) {

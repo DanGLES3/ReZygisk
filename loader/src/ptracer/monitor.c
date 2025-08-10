@@ -66,6 +66,7 @@ struct rezygiskd_status status32 = {
 
 int monitor_epoll_fd;
 bool monitor_events_running = true;
+typedef void (*monitor_event_callback_t)();
 
 bool monitor_events_init() {
   monitor_epoll_fd = epoll_create(1);
@@ -78,14 +79,9 @@ bool monitor_events_init() {
   return true;
 }
 
-struct monitor_event_cbs {
-  void (*callback)();
-  void (*stop_callback)();
-};
-
-bool monitor_events_register_event(struct monitor_event_cbs *event_cbs, int fd, uint32_t events) {
+bool monitor_events_register_event(monitor_event_callback_t event_cb, int fd, uint32_t events) {
   struct epoll_event ev = {
-    .data.ptr = event_cbs,
+    .data.ptr = (void *)event_cb,
     .events = events
   };
 
@@ -116,15 +112,16 @@ void monitor_events_loop() {
   struct epoll_event events[2];
   while (monitor_events_running) {
     int nfds = epoll_wait(monitor_epoll_fd, events, 2, -1);
-    if (nfds == -1) {
-      if (errno != EINTR) PLOGE("epoll_wait");
+    if (nfds == -1 && errno != EINTR) {
+      PLOGE("epoll_wait");
 
-      continue;
+      monitor_events_running = false;
+
+      break;
     }
 
-    for (int i = 0; i < nfds; i++) {
-      struct monitor_event_cbs *event_cbs = (struct monitor_event_cbs *)events[i].data.ptr;
-      event_cbs->callback();
+    for (int i = 0; i < nfds; i++) { 
+      ((monitor_event_callback_t)events[i].data.ptr)();
 
       if (!monitor_events_running) break;
     }
@@ -132,11 +129,6 @@ void monitor_events_loop() {
 
   if (monitor_epoll_fd >= 0) close(monitor_epoll_fd);
   monitor_epoll_fd = -1;
-
-  for (int i = 0; i < (int)(sizeof(events) / sizeof(events[0])); i++) {
-    struct monitor_event_cbs *event_cbs = (struct monitor_event_cbs *)events[i].data.ptr;
-    event_cbs->stop_callback();
-  }
 }
 
 int monitor_sock_fd;
@@ -272,14 +264,12 @@ void rezygiskd_listener_callback() {
           status64.daemon_info = NULL;
         }
 
-        status64.daemon_info = (char *)malloc(msg.length);
+        status64.daemon_info = strdup(msg_data);
         if (!status64.daemon_info) {
           PLOGE("malloc daemon64 info");
 
           break;
         }
-
-        strcpy(status64.daemon_info, msg_data);
 
         update_status(NULL);
 
@@ -293,14 +283,12 @@ void rezygiskd_listener_callback() {
           status32.daemon_info = NULL;
         }
 
-        status32.daemon_info = (char *)malloc(msg.length);
+        status32.daemon_info = strdup(msg_data);
         if (!status32.daemon_info) {
           PLOGE("malloc daemon32 info");
 
           break;
         }
-
-        strcpy(status32.daemon_info, msg_data);
 
         update_status(NULL);
 
@@ -316,14 +304,12 @@ void rezygiskd_listener_callback() {
           status64.daemon_error_info = NULL;
         }
 
-        status64.daemon_error_info = (char *)malloc(msg.length);
+        status64.daemon_error_info = strdup(msg_data);
         if (!status64.daemon_error_info) {
           PLOGE("malloc daemon64 error info");
 
           break;
         }
-
-        strcpy(status64.daemon_error_info, msg_data);
 
         update_status(NULL);
 
@@ -339,14 +325,12 @@ void rezygiskd_listener_callback() {
           status32.daemon_error_info = NULL;
         }
 
-        status32.daemon_error_info = (char *)malloc(msg.length);
+        status32.daemon_error_info = strdup(msg_data);
         if (!status32.daemon_error_info) {
           PLOGE("malloc daemon32 error info");
 
           break;
         }
-
-        strcpy(status32.daemon_error_info, msg_data);
 
         update_status(NULL);
 
@@ -847,10 +831,6 @@ void init_monitor() {
 
   monitor_events_init();
 
-  struct monitor_event_cbs listener_cbs = {
-    .callback = rezygiskd_listener_callback,
-    .stop_callback = rezygiskd_listener_stop
-  };
   if (!rezygiskd_listener_init()) {
     LOGE("failed to create socket");
 
@@ -859,12 +839,8 @@ void init_monitor() {
     exit(1);
   }
 
-  monitor_events_register_event(&listener_cbs, monitor_sock_fd, EPOLLIN | EPOLLET);
+  monitor_events_register_event(rezygiskd_listener_callback, monitor_sock_fd, EPOLLIN | EPOLLET);
 
-  struct monitor_event_cbs sigchld_cbs = {
-    .callback = sigchld_listener_callback,
-    .stop_callback = sigchld_listener_stop
-  };
   if (sigchld_listener_init() == false) {
     LOGE("failed to create signalfd");
 
@@ -874,9 +850,14 @@ void init_monitor() {
     exit(1);
   }
 
-  monitor_events_register_event(&sigchld_cbs, sigchld_signal_fd, EPOLLIN | EPOLLET);
+  monitor_events_register_event(sigchld_listener_callback, sigchld_signal_fd, EPOLLIN | EPOLLET);
 
   monitor_events_loop();
+
+  /* INFO: Once it stops the loop, we cannot access the epool data, so we
+             either manually call the stops or save to a structure. */
+  rezygiskd_listener_stop();
+  sigchld_listener_stop();
 
   if (status64.daemon_info) free(status64.daemon_info);
   if (status64.daemon_error_info) free(status64.daemon_error_info);

@@ -25,7 +25,7 @@ int read_fd(int fd) {
     .msg_controllen = sizeof(cmsgbuf)
   };
 
-  ssize_t ret = recvmsg(fd, &msg, MSG_WAITALL);
+  ssize_t ret = TEMP_FAILURE_RETRY(recvmsg(fd, &msg, MSG_WAITALL));
   if (ret == -1) {
     PLOGE("recvmsg");
 
@@ -47,14 +47,14 @@ int read_fd(int fd) {
 
 ssize_t write_string(int fd, const char *str) {
   size_t str_len = strlen(str);
-  ssize_t write_bytes = write(fd, &str_len, sizeof(size_t));
+  ssize_t write_bytes = TEMP_FAILURE_RETRY(write(fd, &str_len, sizeof(size_t)));
   if (write_bytes != (ssize_t)sizeof(size_t)) {
     LOGE("Failed to write string length: Not all bytes were written (%zd != %zu).\n", write_bytes, sizeof(size_t));
 
     return -1;
   }
 
-  write_bytes = write(fd, str, str_len);
+  write_bytes = TEMP_FAILURE_RETRY(write(fd, str, str_len));
   if (write_bytes != (ssize_t)str_len) {
     LOGE("Failed to write string: Promised bytes doesn't exist (%zd != %zu).\n", write_bytes, str_len);
 
@@ -66,7 +66,7 @@ ssize_t write_string(int fd, const char *str) {
 
 char *read_string(int fd) {
   size_t str_len = 0;
-  ssize_t read_bytes = read(fd, &str_len, sizeof(size_t));
+  ssize_t read_bytes = TEMP_FAILURE_RETRY(read(fd, &str_len, sizeof(size_t)));
   if (read_bytes != (ssize_t)sizeof(size_t)) {
     LOGE("Failed to read string length: Not all bytes were read (%zd != %zu).\n", read_bytes, sizeof(size_t));
 
@@ -80,7 +80,7 @@ char *read_string(int fd) {
     return NULL;
   }
 
-  read_bytes = read(fd, buf, str_len);
+  read_bytes = TEMP_FAILURE_RETRY(read(fd, buf, str_len));
   if (read_bytes != (ssize_t)str_len) {
     LOGE("Failed to read string: Promised bytes doesn't exist (%zd != %zu).\n", read_bytes, str_len);
 
@@ -94,14 +94,14 @@ char *read_string(int fd) {
   return buf;
 }
 
-#define write_func(type)                    \
-  ssize_t write_## type(int fd, type val) { \
-    return write(fd, &val, sizeof(type));   \
+#define write_func(type)                                      \
+  ssize_t write_## type(int fd, type val) {                   \
+    return TEMP_FAILURE_RETRY(write(fd, &val, sizeof(type))); \
   }
 
-#define read_func(type)                     \
-  ssize_t read_## type(int fd, type *val) { \
-    return read(fd, val, sizeof(type));     \
+#define read_func(type)                                     \
+  ssize_t read_## type(int fd, type *val) {                 \
+    return TEMP_FAILURE_RETRY(read(fd, val, sizeof(type))); \
   }
 
 write_func(uint8_t)

@@ -123,7 +123,6 @@ static void load_modules(enum Architecture arch, struct Context *restrict contex
       continue;
     }
 
-
     context->modules = realloc(context->modules, (size_t)((context->len + 1) * sizeof(struct Module)));
     if (context->modules == NULL) {
       LOGE("Failed reallocating memory for modules.\n");
@@ -143,8 +142,10 @@ static void load_modules(enum Architecture arch, struct Context *restrict contex
 static void free_modules(struct Context *restrict context) {
   for (size_t i = 0; i < context->len; i++) {
     free(context->modules[i].name);
-    if (context->modules[i].companion != -1) close(context->modules[i].companion);
+    if (context->modules[i].companion >= 0) close(context->modules[i].companion);
   }
+
+  free(context->modules);
 }
 
 static int create_daemon_socket(void) {
@@ -288,7 +289,7 @@ void zygiskd_start(char *restrict argv[]) {
     unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
     unix_datagram_sendto(CONTROLLER_SOCKET, msg_data, (size_t)msg.length);
 
-    free(msg_data);
+    exit(EXIT_FAILURE);
   } else {
     enum Architecture arch = get_arch();
     load_modules(arch, &context);
@@ -301,12 +302,24 @@ void zygiskd_start(char *restrict argv[]) {
     } else {
       for (size_t i = 0; i < context.len; i++) {
         if (i != context.len - 1) {
-          module_list = realloc(module_list, module_list_len + strlen(context.modules[i].name) + strlen(", ") + 1);
-          if (module_list == NULL) {
+          char *tmp_module_list = realloc(module_list, module_list_len + strlen(context.modules[i].name) + strlen(", ") + 1);
+          if (tmp_module_list == NULL) {
             LOGE("Failed reallocating memory for module list.\n");
 
-            return;
+            char *kmsg_failure = "Failed reallocating memory for module list";
+            struct MsgHead msg = {
+              .cmd = DAEMON_SET_ERROR_INFO,
+              .length = (int)strlen(kmsg_failure) + 1
+            };
+            unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
+            unix_datagram_sendto(CONTROLLER_SOCKET, kmsg_failure, (size_t)msg.length);
+
+            free(module_list);
+            free_modules(&context);
+
+            exit(EXIT_FAILURE);
           }
+          module_list = tmp_module_list;
 
           strcpy(module_list + module_list_len, context.modules[i].name);
 
@@ -316,12 +329,24 @@ void zygiskd_start(char *restrict argv[]) {
 
           module_list_len += strlen(", ");
         } else {
-          module_list = realloc(module_list, module_list_len + strlen(context.modules[i].name) + 1);
-          if (module_list == NULL) {
+          char *tmp_module_list = realloc(module_list, module_list_len + strlen(context.modules[i].name) + 1);
+          if (tmp_module_list == NULL) {
             LOGE("Failed reallocating memory for module list.\n");
 
-            return;
+            char *kmsg_failure = "Failed reallocating memory for module list";
+            struct MsgHead msg = {
+              .cmd = DAEMON_SET_ERROR_INFO,
+              .length = (int)strlen(kmsg_failure) + 1
+            };
+            unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
+            unix_datagram_sendto(CONTROLLER_SOCKET, kmsg_failure, (size_t)msg.length);
+
+            free(module_list);
+            free_modules(&context);
+
+            exit(EXIT_FAILURE);
           }
+          module_list = tmp_module_list;
 
           strcpy(module_list + module_list_len, context.modules[i].name);
 
@@ -344,7 +369,16 @@ void zygiskd_start(char *restrict argv[]) {
     if (msg_data == NULL) {
       LOGE("Failed allocating memory for message data.\n");
 
-      return;
+      char *kmsg_failure = "Failed allocating memory for message data";
+      msg.cmd = DAEMON_SET_ERROR_INFO;
+      msg.length = (int)strlen(kmsg_failure) + 1;
+      unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
+      unix_datagram_sendto(CONTROLLER_SOCKET, kmsg_failure, (size_t)msg.length);
+
+      free(module_list);
+      free_modules(&context);
+
+      exit(EXIT_FAILURE);
     }
 
     snprintf(msg_data, msg_length, "Root: %s, Modules: %s", impl_name, module_list);
@@ -360,6 +394,8 @@ void zygiskd_start(char *restrict argv[]) {
   if (socket_fd == -1) {
     LOGE("Failed creating daemon socket\n");
 
+    free_modules(&context);
+
     return;
   }
 
@@ -372,7 +408,7 @@ void zygiskd_start(char *restrict argv[]) {
     if (client_fd == -1) {
       LOGE("accept: %s\n", strerror(errno));
 
-      return;
+      break;
     }
 
     uint8_t action8 = 0;
@@ -380,11 +416,11 @@ void zygiskd_start(char *restrict argv[]) {
     if (len == -1) {
       LOGE("read: %s\n", strerror(errno));
 
-      return;
+      break;
     } else if (len == 0) {
       LOGI("Client disconnected\n");
 
-      return;
+      break;
     }
 
     enum DaemonSocketAction action = (enum DaemonSocketAction)action8;
@@ -402,10 +438,10 @@ void zygiskd_start(char *restrict argv[]) {
       }
       case ZygoteRestart: {
         for (size_t i = 0; i < context.len; i++) {
-          if (context.modules[i].companion != -1) {
-            close(context.modules[i].companion);
-            context.modules[i].companion = -1;
-          }
+          if (context.modules[i].companion <= -1) continue;
+
+          close(context.modules[i].companion);
+          context.modules[i].companion = -1;
         }
 
         break;
@@ -566,9 +602,19 @@ void zygiskd_start(char *restrict argv[]) {
         ssize_t ret = read_size_t(client_fd, &index);
         ASSURE_SIZE_READ_BREAK("RequestCompanionSocket", "index", ret, sizeof(index));
 
-        struct Module *module = &context.modules[index];
+        if (index >= context.len) {
+          LOGE("Invalid module index: %zu\n", index);
 
-        if (module->companion != -1) {
+          ret = write_uint8_t(client_fd, 0);
+          ASSURE_SIZE_WRITE_BREAK("RequestCompanionSocket", "response", ret, sizeof(int));
+
+          close(client_fd);
+
+          break;
+        }
+
+        struct Module *module = &context.modules[index];
+        if (module->companion >= 0) {
           if (!check_unix_socket(module->companion, false)) {
             LOGE(" - Companion for module \"%s\" crashed\n", module->name);
 
@@ -577,10 +623,10 @@ void zygiskd_start(char *restrict argv[]) {
           }
         }
 
-        if (module->companion == -1) {
+        if (module->companion <= -1) {
           module->companion = spawn_companion(argv, module->name, module->lib_fd);
 
-          if (module->companion > 0) {
+          if (module->companion >= 0) {
             LOGI(" - Spawned companion for \"%s\": %d\n", module->name, module->companion);
           } else {
             if (module->companion == -2) {
@@ -597,7 +643,7 @@ void zygiskd_start(char *restrict argv[]) {
                  so just sending the file descriptor of the client is
                  safe.
         */
-        if (module->companion != -1) {
+        if (module->companion >= 0) {
           LOGI(" - Sending companion fd socket of module \"%s\"\n", module->name);
 
           if (write_fd(module->companion, client_fd) == -1) {
@@ -628,6 +674,17 @@ void zygiskd_start(char *restrict argv[]) {
         size_t index = 0;
         ssize_t ret = read_size_t(client_fd, &index);
         ASSURE_SIZE_READ_BREAK("GetModuleDir", "index", ret, sizeof(index));
+
+        if (index >= context.len) {
+          LOGE("Invalid module index: %zu\n", index);
+
+          ret = write_uint8_t(client_fd, 0);
+          ASSURE_SIZE_WRITE_BREAK("GetModuleDir", "response", ret, sizeof(int));
+
+          close(client_fd);
+
+          break;
+        }
 
         char module_dir[PATH_MAX];
         snprintf(module_dir, PATH_MAX, "%s/%s", PATH_MODULES_DIR, context.modules[index].name);

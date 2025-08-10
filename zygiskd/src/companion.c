@@ -153,7 +153,14 @@ void companion_entry(int fd) {
     LOGI("New companion request.\n - Module name: %s\n - Client fd: %d\n", name, client_fd);
 
     ret = write_uint8_t(client_fd, 1);
-    ASSURE_SIZE_WRITE("ZygiskdCompanion", "client_fd", ret, sizeof(uint8_t));
+    if (ret != sizeof(uint8_t)) {
+      LOGE("Failed to sent client_fd in ZygiskdCompanion: Expected %zu, got %zd\n", sizeof(uint8_t), ret);
+
+      free(args);
+      close(client_fd);
+
+      break;
+    }
 
     pthread_t thread;
     if (pthread_create(&thread, NULL, entry_thread, (void *)args) == 0)
