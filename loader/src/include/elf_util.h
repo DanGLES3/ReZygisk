@@ -1,12 +1,19 @@
 #ifndef ELF_UTIL_H
 #define ELF_UTIL_H
 
+#include <stdbool.h>
 #include <string.h>
 #include <link.h>
-#include <linux/elf.h>
 #include <sys/types.h>
+#include <pthread.h> // Added for threading primitives
 
 #define SHT_GNU_HASH 0x6ffffff6
+
+// Function pointer types for constructors and destructors
+typedef void (*linker_simple_func_t)(void);
+typedef void (*linker_ctor_function_t)(int, char**, char**);
+typedef void (*linker_dtor_function_t)(void);
+
 
 struct symtabs {
   char *name;
@@ -54,17 +61,7 @@ void ElfImg_destroy(ElfImg *img);
 
 ElfImg *ElfImg_create(const char *elf, void *base);
 
-ElfW(Addr) ElfLookup(ElfImg *restrict img, const char *restrict name, uint32_t hash);
-
-ElfW(Addr) GnuLookup(ElfImg *restrict img, const char *restrict name, uint32_t hash);
-
-ElfW(Addr) LinearLookup(ElfImg *restrict img, const char *restrict name);
-
-ElfW(Addr) LinearLookupByPrefix(ElfImg *restrict img, const char *name);
-
-int dl_cb(struct dl_phdr_info *info, size_t size, void *data);
-
-ElfW(Addr) getSymbOffset(ElfImg *img, const char *name);
+ElfW(Addr) getSymbOffset(ElfImg *img, const char *name, unsigned char *sym_type);
 
 ElfW(Addr) getSymbAddress(ElfImg *img, const char *name);
 

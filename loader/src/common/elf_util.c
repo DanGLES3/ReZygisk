@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/auxv.h>
 
 #include <unistd.h>
 
@@ -159,14 +160,14 @@ ElfImg *ElfImg_create(const char *elf, void *base) {
   }
 
   if (base) {
-    /* LOGI: Due to the use in zygisk-ptracer, we need to allow pre-
+    /* INFO: Due to the use in zygisk-ptracer, we need to allow pre-
               fetched bases to be passed, as the linker (Android 7.1
               and below) is not loaded from dlopen, which makes it not
               be visible with dl_iterate_phdr.
     */
     img->base = base;
 
-    LOGI("Using provided base address 0x%p for %s", base, elf);
+    LOGD("Using provided base address 0x%p for %s", base, elf);
   } else {
     if (!_find_module_base(img)) {
       LOGE("Failed to find module base for %s using dl_iterate_phdr", elf);
@@ -387,7 +388,7 @@ ElfImg *ElfImg_create(const char *elf, void *base) {
       img->symstr_offset_for_symtab = 0;
     }
   } else {
-    LOGI("No .symtab section found or section headers missing");
+    LOGD("No .symtab section found or section headers missing");
 
     img->symtab_start = NULL;
     img->symtab_count = 0;
@@ -403,43 +404,22 @@ ElfImg *ElfImg_create(const char *elf, void *base) {
         img->bias = phdr[i].p_vaddr - phdr[i].p_offset;
         bias_calculated = true;
 
-        LOGI("Calculated bias %ld from PT_LOAD segment %d (vaddr %lx)", (long)img->bias, i, (unsigned long)phdr[i].p_vaddr);
+        LOGD("Calculated bias %ld from PT_LOAD segment %d (vaddr %lx)", (long)img->bias, i, (unsigned long)phdr[i].p_vaddr);
 
         break;
       }
     }
 
-    if (!bias_calculated) {
-      for (int i = 0; i < img->header->e_phnum; ++i) {
-        if (phdr[i].p_type == PT_LOAD) {
-          img->bias = phdr[i].p_vaddr - phdr[i].p_offset;
-          bias_calculated = true;
+    if (!bias_calculated) for (int i = 0; i < img->header->e_phnum; ++i) {
+      if (phdr[i].p_type != PT_LOAD) continue;
 
-          LOGI("Calculated bias %ld from first PT_LOAD segment %d (vaddr %lx, offset %lx)",
-              (long)img->bias, i, (unsigned long)phdr[i].p_vaddr, (unsigned long)phdr[i].p_offset);
+      img->bias = phdr[i].p_vaddr - phdr[i].p_offset;
+      bias_calculated = true;
 
-          break;
-        }
-      }
-    }
-  }
+      LOGD("Calculated bias %ld from first PT_LOAD segment %d (vaddr %lx, offset %lx)",
+          (long)img->bias, i, (unsigned long)phdr[i].p_vaddr, (unsigned long)phdr[i].p_offset);
 
-  if (!bias_calculated && shdr_base) {
-    LOGW("Could not calculate bias from program headers, falling back to section method.");
-    uintptr_t shoff_for_bias = (uintptr_t)shdr_base;
-    for (int i = 0; i < img->header->e_shnum; i++, shoff_for_bias += img->header->e_shentsize) {
-      ElfW(Shdr) *section_h = (ElfW(Shdr *))shoff_for_bias;
-
-      if ((section_h->sh_flags & SHF_ALLOC) && section_h->sh_addr != 0) {
-        img->bias = (off_t)section_h->sh_addr - (off_t)section_h->sh_offset;
-        bias_calculated = true;
-
-        char *sname = section_str ? (section_h->sh_name + section_str) : "<?>";
-        LOGI("Calculated bias %ld from first allocated section %s (addr %lx, offset %lx)",
-              (long)img->bias, sname, (unsigned long)section_h->sh_addr, (unsigned long)section_h->sh_offset);
-
-        break;
-      }
+      break;
     }
   }
 
@@ -523,7 +503,7 @@ bool _load_symtabs(ElfImg *img) {
   return true;
 }
 
-ElfW(Addr) GnuLookup(ElfImg *restrict img, const char *name, uint32_t hash) {
+ElfW(Addr) GnuLookup(ElfImg *restrict img, const char *name, uint32_t hash, unsigned char *sym_type) {
   if (img->gnu_nbucket_ == 0 || img->gnu_bloom_size_ == 0 || !img->gnu_bloom_filter_ || !img->gnu_bucket_ || !img->gnu_chain_ || !img->dynsym_start || !img->strtab_start)
     return 0;
 
@@ -545,7 +525,7 @@ ElfW(Addr) GnuLookup(ElfImg *restrict img, const char *name, uint32_t hash) {
 
   uint32_t sym_index = img->gnu_bucket_[hash % img->gnu_nbucket_];
   if (sym_index < img->gnu_symndx_) {
-    LOGI("Symbol %s hash %u maps to bucket %u index %u (below gnu_symndx %u), not exported?", name, hash, hash % img->gnu_nbucket_, sym_index, img->gnu_symndx_);
+    LOGW("Symbol %s hash %u maps to bucket %u index %u (below gnu_symndx %u), not exported?", name, hash, hash % img->gnu_nbucket_, sym_index, img->gnu_symndx_);
 
     return 0;
   }
@@ -568,8 +548,12 @@ ElfW(Addr) GnuLookup(ElfImg *restrict img, const char *name, uint32_t hash) {
     return 0;
   }
 
-  if ((((chain_val ^ hash) >> 1) == 0 && strcmp(name, strings + sym->st_name) == 0) && sym->st_shndx != SHN_UNDEF)
+  if ((((chain_val ^ hash) >> 1) == 0 && strcmp(name, strings + sym->st_name) == 0) && sym->st_shndx != SHN_UNDEF) {
+    unsigned int type = ELF_ST_TYPE(sym->st_info);
+    if (sym_type) *sym_type = type;
+
     return sym->st_value;
+  }
 
   while ((chain_val & 1) == 0) {
     sym_index++;
@@ -589,14 +573,18 @@ ElfW(Addr) GnuLookup(ElfImg *restrict img, const char *name, uint32_t hash) {
       break;
     }
 
-    if ((((chain_val ^ hash) >> 1) == 0 && strcmp(name, strings + sym->st_name) == 0) && sym->st_shndx != SHN_UNDEF)
+    if ((((chain_val ^ hash) >> 1) == 0 && strcmp(name, strings + sym->st_name) == 0) && sym->st_shndx != SHN_UNDEF) {
+      unsigned int type = ELF_ST_TYPE(sym->st_info);
+      if (sym_type) *sym_type = type;
+
       return sym->st_value;
+    }
   }
 
   return 0;
 }
 
-ElfW(Addr) ElfLookup(ElfImg *restrict img, const char *restrict name, uint32_t hash) {
+ElfW(Addr) ElfLookup(ElfImg *restrict img, const char *restrict name, uint32_t hash, unsigned char *sym_type) {
   if (img->nbucket_ == 0 || !img->bucket_ || !img->chain_ || !img->dynsym_start || !img->strtab_start)
     return 0;
 
@@ -605,14 +593,18 @@ ElfW(Addr) ElfLookup(ElfImg *restrict img, const char *restrict name, uint32_t h
   for (size_t n = img->bucket_[hash % img->nbucket_]; n != STN_UNDEF; n = img->chain_[n]) {
     ElfW(Sym) *sym = img->dynsym_start + n;
 
-    if (strcmp(name, strings + sym->st_name) == 0 && sym->st_shndx != SHN_UNDEF)
+    if (strcmp(name, strings + sym->st_name) == 0 && sym->st_shndx != SHN_UNDEF) {
+      unsigned int type = ELF_ST_TYPE(sym->st_info);
+      if (sym_type) *sym_type = type;
+
       return sym->st_value;
+    }
   }
 
   return 0;
 }
 
-ElfW(Addr) LinearLookup(ElfImg *img, const char *restrict name) {
+ElfW(Addr) LinearLookup(ElfImg *img, const char *restrict name, unsigned char *sym_type) {
   if (!_load_symtabs(img)) {
     LOGE("Failed to load symtabs for linear lookup of %s", name);
 
@@ -623,7 +615,7 @@ ElfW(Addr) LinearLookup(ElfImg *img, const char *restrict name) {
   if (valid_symtabs_amount == 0) {
     LOGW("No valid symbols (FUNC/OBJECT with size > 0) found in .symtab for %s", img->elf);
 
-    return false;
+    return 0;
   }
 
   for (size_t i = 0; i < valid_symtabs_amount; i++) {
@@ -633,13 +625,16 @@ ElfW(Addr) LinearLookup(ElfImg *img, const char *restrict name) {
     if (img->symtabs_[i].sym->st_shndx == SHN_UNDEF)
       continue;
 
+    unsigned int type = ELF_ST_TYPE(img->symtabs_[i].sym->st_info);
+    if (sym_type) *sym_type = type;
+
     return img->symtabs_[i].sym->st_value;
   }
 
   return 0;
 }
 
-ElfW(Addr) LinearLookupByPrefix(ElfImg *img, const char *prefix) {
+ElfW(Addr) LinearLookupByPrefix(ElfImg *img, const char *prefix, unsigned char *sym_type) {
   if (!_load_symtabs(img)) {
     LOGE("Failed to load symtabs for linear lookup by prefix of %s", prefix);
 
@@ -650,7 +645,7 @@ ElfW(Addr) LinearLookupByPrefix(ElfImg *img, const char *prefix) {
   if (valid_symtabs_amount == 0) {
     LOGW("No valid symbols (FUNC/OBJECT with size > 0) found in .symtab for %s", img->elf);
 
-    return false;
+    return 0;
   }
 
   size_t prefix_len = strlen(prefix);
@@ -666,45 +661,161 @@ ElfW(Addr) LinearLookupByPrefix(ElfImg *img, const char *prefix) {
     if (img->symtabs_[i].sym->st_shndx == SHN_UNDEF)
       continue;
 
+    unsigned int type = ELF_ST_TYPE(img->symtabs_[i].sym->st_info);
+    if (sym_type) *sym_type = type;
+
     return img->symtabs_[i].sym->st_value;
   }
 
   return 0;
 }
 
-ElfW(Addr) getSymbOffset(ElfImg *img, const char *name) {
+ElfW(Addr) getSymbOffset(ElfImg *img, const char *name, unsigned char *sym_type) {
   ElfW(Addr) offset = 0;
 
-  offset = GnuLookup(img, name, GnuHash(name));
+  offset = GnuLookup(img, name, GnuHash(name), sym_type);
   if (offset != 0) return offset;
 
-  offset = ElfLookup(img, name, ElfHash(name));
+  offset = ElfLookup(img, name, ElfHash(name), sym_type);
   if (offset != 0) return offset;
 
-  offset = LinearLookup(img, name);
+  offset = LinearLookup(img, name, sym_type);
   if (offset != 0) return offset;
 
   return 0;
 }
 
+#ifdef __aarch64__
+  /* INFO: Struct containing information about hardware capabilities used in resolver. This
+             struct information is pulled directly from the AOSP code.
+
+     SOURCES:
+      - https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r1/libc/include/sys/ifunc.h#53
+  */
+  struct __ifunc_arg_t {
+    unsigned long _size;
+    unsigned long _hwcap;
+    unsigned long _hwcap2;
+  };
+
+  /* INFO: This is a constant used in the AOSP code to indicate that the struct __ifunc_arg_t
+             contains hardware capabilities.
+
+     SOURCES:
+      - https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r1/libc/include/sys/ifunc.h#74
+  */
+  #define _IFUNC_ARG_HWCAP (1ULL << 62)
+#elif defined(__riscv)
+  /* INFO: Struct used in Linux RISC-V architecture to probe hardware capabilities.
+
+     SOURCES:
+      - https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r1/libc/kernel/uapi/asm-riscv/asm/hwprobe.h#10
+  */
+  struct riscv_hwprobe {
+    int64_t key;
+    uint64_t value;
+  };
+
+  /* INFO: This function is used in the AOSP code to probe hardware capabilities on RISC-V architecture
+             by calling the syscall __NR_riscv_hwprobe and passing the parameters that will filled with
+             the device hardware capabilities.
+
+     SOURCES:
+      - https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r1/libc/bionic/vdso.cpp#86
+  */
+  int __riscv_hwprobe(struct riscv_hwprobe *pairs, size_t pair_count, size_t cpu_count, unsigned long *cpus, unsigned flags) {
+    register long a0 __asm__("a0") = (long)pairs;
+    register long a1 __asm__("a1") = pair_count;
+    register long a2 __asm__("a2") = cpu_count;
+    register long a3 __asm__("a3") = (long)cpus;
+    register long a4 __asm__("a4") = flags;
+    register long a7 __asm__("a7") = __NR_riscv_hwprobe;
+
+    __asm__ volatile(
+      "ecall"
+      : "=r"(a0)
+      : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a7)
+    );
+
+    return -a0;
+  }
+
+  /* INFO: This is a function pointer type that points how the signature of the __riscv_hwprobe
+             function is.
+
+     SOURCES:
+      - https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r1/libc/include/sys/hwprobe.h#62
+  */
+  typedef int (*__riscv_hwprobe_t)(struct riscv_hwprobe *__pairs, size_t __pair_count, size_t __cpu_count, unsigned long *__cpus, unsigned __flags);
+#endif
+
+/* INFO: GNU ifuncs (indirect functions) are functions that does not execute the code by itself,
+           but instead lead to other functions that may very according to hardware capabilities,
+           or other reasons, depending of the architecture.
+
+         This function is based on AOSP's (Android Open Source Project) code, and resolves the
+           indirect symbol, leading to the correct, most appropriate for the hardware, symbol.
+
+    SOURCES: 
+     - https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r1/linker/linker.cpp#2594
+     - https://android.googlesource.com/platform/bionic/+/tags/android-16.0.0_r1/libc/bionic/bionic_call_ifunc_resolver.cpp#41
+*/
+static ElfW(Addr) handle_indirect_symbol(ElfImg *img, ElfW(Off) offset) {
+  ElfW(Addr) resolver_addr = (ElfW(Addr))((uintptr_t)img->base + offset - img->bias);
+
+  #ifdef __aarch64__
+    typedef ElfW(Addr) (*ifunc_resolver_t)(uint64_t, struct __ifunc_arg_t *);
+
+    struct __ifunc_arg_t args = {
+      ._size = sizeof(struct __ifunc_arg_t),
+      ._hwcap = getauxval(AT_HWCAP),
+      ._hwcap2 = getauxval(AT_HWCAP2)
+    };
+
+    return ((ifunc_resolver_t)resolver_addr)(args._hwcap | _IFUNC_ARG_HWCAP, &args);
+  #elif defined(__arm__)
+      typedef ElfW(Addr) (*ifunc_resolver_t)(unsigned long);
+
+      return ((ifunc_resolver_t)resolver_addr)(getauxval(AT_HWCAP));
+  #elif defined(__riscv)
+    typedef ElfW(Addr) (*ifunc_resolver_t)(uint64_t, __riscv_hwprobe_t, void *);
+
+    return ((ifunc_resolver_t)resolver_addr)(getauxval(AT_HWCAP), __riscv_hwprobe, NULL);
+  #else
+    typedef ElfW(Addr) (*ifunc_resolver_t)(void);
+
+    return ((ifunc_resolver_t)resolver_addr)();
+  #endif
+}
+
 ElfW(Addr) getSymbAddress(ElfImg *img, const char *name) {
-  ElfW(Addr) offset = getSymbOffset(img, name);
+  unsigned char sym_type = 0;
+  ElfW(Addr) offset = getSymbOffset(img, name, &sym_type);
 
   if (offset == 0 || !img->base) return 0;
 
-  ElfW(Addr) address = (ElfW(Addr))((uintptr_t)img->base + offset - img->bias);
+  if (sym_type == STT_GNU_IFUNC) {
+    LOGD("Resolving STT_GNU_IFUNC symbol %s", name);
 
-  return address;
+    return handle_indirect_symbol(img, offset);
+  }
+
+  return (ElfW(Addr))((uintptr_t)img->base + offset - img->bias);
 }
 
 ElfW(Addr) getSymbAddressByPrefix(ElfImg *img, const char *prefix) {
-  ElfW(Addr) offset = LinearLookupByPrefix(img, prefix);
+  unsigned char sym_type = 0;
+  ElfW(Addr) offset = LinearLookupByPrefix(img, prefix, &sym_type);
 
   if (offset == 0 || !img->base) return 0;
 
-  ElfW(Addr) address = (ElfW(Addr))((uintptr_t)img->base + offset - img->bias);
+  if (sym_type == STT_GNU_IFUNC) {
+    LOGD("Resolving STT_GNU_IFUNC symbol by prefix %s", prefix);
 
-  return address;
+    return handle_indirect_symbol(img, offset);
+  }
+
+  return (ElfW(Addr))((uintptr_t)img->base + offset - img->bias);
 }
 
 void *getSymbValueByPrefix(ElfImg *img, const char *prefix) {
