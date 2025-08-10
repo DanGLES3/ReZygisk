@@ -5,11 +5,7 @@
 extern "C" {
 #endif /* __cplusplus */
 
-typedef struct SoInfo SoInfo;
-
-struct SoInfo {
-  char data[0];
-};
+typedef void SoInfo;
 
 #define FuncType(name) void (*name)
 
@@ -28,14 +24,20 @@ struct pdg {
           libzygisk.so, so that it doesn't create gaps between current module info
           and the next (soinfo).
 
-        To do that, we use 2 functions: soinfo_free, and set_size, which will
-          zero the region size, and then remove all traces of that library (libzygisk.so)
-          which was previously loaded.
+        To do that, we use 2 functions: set_size and dlclose, which will first zero
+          zero the size that the linker believes the shared library is, and then dlclose.
+          Because the size is 0, it won't munmap the library, allowing us to keep loaded while
+          having all other traces removed.
+
+        For the case of modules, which are arbitrary, we won't call dlclose, as it could break
+          the module. Instead of using dlclose, we separately call soinfo_free, which will free
+          the soinfo structure. That will allow to keep the data initialized by constructors
+          mmaped, hence properly dropping most traces without breaking the module.
 
   SOURCES:
    - https://android.googlesource.com/platform/bionic/+/refs/heads/android15-release/linker/linker.cpp#1712
 */
-bool solist_drop_so_path(void *lib_memory);
+bool solist_drop_so_path(void *lib_memory, bool unload);
 
 /* 
   INFO: When dlopen'ing a library, the system will increment 1 to a global

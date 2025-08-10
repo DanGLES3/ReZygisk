@@ -368,10 +368,8 @@ bool inject_on_main(int pid, const char *lib_path) {
     /* call injector entry(start_addr, block_size, path) */
     args[0] = (uintptr_t)start_addr;
     args[1] = block_size;
-    str = push_string(pid, &regs, rezygiskd_get_path());
-    args[2] = (uintptr_t)str;
 
-    remote_call(pid, &regs, injector_entry, (uintptr_t)libc_return_addr, args, 3);
+    remote_call(pid, &regs, injector_entry, (uintptr_t)libc_return_addr, args, 2);
 
     free(args);
 

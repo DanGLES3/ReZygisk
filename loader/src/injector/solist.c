@@ -1,8 +1,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
-
-#include <android/dlext.h>
+#include <dlfcn.h>
 
 #include <linux/limits.h>
 
@@ -24,6 +23,7 @@
 static const char *(*get_realpath_sym)(SoInfo *) = NULL;
 static void (*soinfo_free)(SoInfo *) = NULL;
 static SoInfo *(*find_containing_library)(const void *p) = NULL;
+static void (*purge_unused_memory)(void) = NULL;
 
 static inline const char *get_path(SoInfo *self) {
   if (get_realpath_sym)
@@ -104,6 +104,8 @@ static bool solist_init() {
 
     ElfImg_destroy(linker);
 
+    somain = NULL;
+
     return false;
   }
 
@@ -114,6 +116,8 @@ static bool solist_init() {
     LOGE("Failed to find soinfo_free __dl__ZL11soinfo_freeP6soinfo*");
 
     ElfImg_destroy(linker);
+
+    somain = NULL;
 
     return false;
   }
@@ -126,8 +130,25 @@ static bool solist_init() {
 
     ElfImg_destroy(linker);
 
+    somain = NULL;
+
     return false;
   }
+
+  LOGD("%p is find_containing_library", (void *)find_containing_library);
+
+  purge_unused_memory = (void (*)())getSymbAddress(linker, "__dl__Z19purge_unused_memoryv");
+  if (purge_unused_memory == NULL) {
+    LOGE("Failed to find purge_unused_memory __dl__Z19purge_unused_memoryv");
+
+    ElfImg_destroy(linker);
+
+    somain = NULL;
+
+    return false;
+  }
+
+  LOGD("%p is purge_unused_memory", (void *)purge_unused_memory);
 
   g_module_load_counter = (size_t *)getSymbAddress(linker, "__dl__ZL21g_module_load_counter");
   if (g_module_load_counter != NULL) LOGD("found symbol g_module_load_counter");
@@ -154,7 +175,7 @@ static bool solist_init() {
 
 /* INFO: find_containing_library returns the SoInfo for the library that contains
            that memory inside its limits, hence why named "lib_memory" in ReZygisk. */
-bool solist_drop_so_path(void *lib_memory) {
+bool solist_drop_so_path(void *lib_memory, bool unload) {
   if (somain == NULL && !solist_init()) {
     LOGE("Failed to initialize solist");
 
@@ -164,6 +185,8 @@ bool solist_drop_so_path(void *lib_memory) {
   SoInfo *found = (*find_containing_library)(lib_memory);
   if (found == NULL) {
     LOGD("Could not find containing library for %p", lib_memory);
+
+    purge_unused_memory();
 
     return false;
   }
@@ -176,16 +199,44 @@ bool solist_drop_so_path(void *lib_memory) {
 
     return false;
   }
-  strcpy(path, get_path(found));
+  strncpy(path, get_path(found), sizeof(path) - 1);
 
+  /* INFO: This area is guarded. Must unprotect first. */
   pdg_unprotect();
-
   set_size(found, 0);
-  soinfo_free(found);
+  if (unload) pdg_protect();
 
-  pdg_protect();
+  LOGD("Set size of %p to 0", (void *)found);
 
-  LOGD("Successfully dropped so path for: %s", path);
+  /* INFO: We know that as libzygisk.so our limits, but modules are arbitrary, so
+             calling deconstructors might break them. To avoid that, we manually call
+             the separated structures, that however won't clean all traces in soinfo,
+             not for now, at least. */
+  if (unload && dlclose((void *)found) == -1) {
+    LOGE("Failed to dlclose so path for %s: %s", path, dlerror());
+
+    return false;
+  } else if (!unload) {
+    LOGD("Not unloading so path for %s, only dropping it", path);
+
+    /* TODO: call notify_gdb_of_unload(found); (it is static) to avoid leaving traces in
+               r_debug_tail.
+       SOURCES:
+        - https://android.googlesource.com/platform/bionic/+/refs/heads/main/linker/linker_gdb_support.cpp#94
+    */
+    /* INFO: unregister_soinfo_tls cannot be used since module might use JNI which may
+               require TLS, so we cannot remove it. */
+    soinfo_free(found);
+
+    pdg_protect();
+  }
+
+  LOGD("Successfully hidden soinfo traces for %s", path);
+
+  /* INFO: Avoid leaks by ensuring the freed places are munmapped */
+  purge_unused_memory();
+
+  LOGD("Purged unused memory successfully");
 
   /* INFO: Let's avoid trouble regarding detections */
   memset(path, strlen(path), 0);
