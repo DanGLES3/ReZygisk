@@ -164,14 +164,14 @@ async function getModuleNames(modules) {
     zygote_divs[0].style.display = 'block'
 
     switch (zygote64) {
-      case 0: {
+      case 1: {
         zygote_status_divs[0].innerHTML = translations.page.home.info.zygote.injected
 
         actuallyWorking++
 
         break
       }
-      case 1: zygote_status_divs[0].innerHTML = translations.page.home.info.zygote.notInjected; break
+      case 0: zygote_status_divs[0].innerHTML = translations.page.home.info.zygote.notInjected; break
       default: zygote_status_divs[0].innerHTML = translations.page.home.info.zygote.unknown
     }
   }
