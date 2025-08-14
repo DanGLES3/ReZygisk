@@ -261,11 +261,6 @@ static int spawn_companion(char *restrict argv[], char *restrict name, int lib_f
   exit(0);
 }
 
-struct __attribute__((__packed__)) MsgHead {
-  unsigned int cmd;
-  int length;
-};
-
 /* WARNING: Dynamic memory based */
 void zygiskd_start(char *restrict argv[]) {
   /* INFO: When implementation is None or Multiple, it won't set the values 
@@ -276,118 +271,42 @@ void zygiskd_start(char *restrict argv[]) {
   struct root_impl impl;
   get_impl(&impl);
   if (impl.impl == None || impl.impl == Multiple) {
-    char *msg_data = NULL;
+    unix_datagram_sendto(CONTROLLER_SOCKET, &(uint8_t){ DAEMON_SET_ERROR_INFO }, sizeof(uint8_t));
 
-    if (impl.impl == None) msg_data = "Unsupported environment: Unknown root implementation";
-    else msg_data = "Unsupported environment: Multiple root implementations found";
+    const char *msg = NULL;
+    if (impl.impl == None) msg = "Unsupported environment: Unknown root implementation";
+    else msg = "Unsupported environment: Multiple root implementations found";
 
-    struct MsgHead msg = {
-      .cmd = DAEMON_SET_ERROR_INFO,
-      .length = (int)strlen(msg_data) + 1
-    };
+    LOGE("%s", msg);
 
-    unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
-    unix_datagram_sendto(CONTROLLER_SOCKET, msg_data, (size_t)msg.length);
+    uint32_t msg_len = (uint32_t)strlen(msg);
+    unix_datagram_sendto(CONTROLLER_SOCKET, &msg_len, sizeof(msg_len));
+    unix_datagram_sendto(CONTROLLER_SOCKET, (void *)msg, msg_len);
 
     exit(EXIT_FAILURE);
   } else {
     enum Architecture arch = get_arch();
     load_modules(arch, &context);
 
-    char *module_list = NULL;
-    size_t module_list_len = 0;
-    if (context.len == 0) {
-      module_list = strdup("None");
-      module_list_len = strlen("None");
-    } else {
-      for (size_t i = 0; i < context.len; i++) {
-        if (i != context.len - 1) {
-          char *tmp_module_list = realloc(module_list, module_list_len + strlen(context.modules[i].name) + strlen(", ") + 1);
-          if (tmp_module_list == NULL) {
-            LOGE("Failed reallocating memory for module list.\n");
-
-            char *kmsg_failure = "Failed reallocating memory for module list";
-            struct MsgHead msg = {
-              .cmd = DAEMON_SET_ERROR_INFO,
-              .length = (int)strlen(kmsg_failure) + 1
-            };
-            unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
-            unix_datagram_sendto(CONTROLLER_SOCKET, kmsg_failure, (size_t)msg.length);
-
-            free(module_list);
-            free_modules(&context);
-
-            exit(EXIT_FAILURE);
-          }
-          module_list = tmp_module_list;
-
-          strcpy(module_list + module_list_len, context.modules[i].name);
-
-          module_list_len += strlen(context.modules[i].name);
-
-          strcpy(module_list + module_list_len, ", ");
-
-          module_list_len += strlen(", ");
-        } else {
-          char *tmp_module_list = realloc(module_list, module_list_len + strlen(context.modules[i].name) + 1);
-          if (tmp_module_list == NULL) {
-            LOGE("Failed reallocating memory for module list.\n");
-
-            char *kmsg_failure = "Failed reallocating memory for module list";
-            struct MsgHead msg = {
-              .cmd = DAEMON_SET_ERROR_INFO,
-              .length = (int)strlen(kmsg_failure) + 1
-            };
-            unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
-            unix_datagram_sendto(CONTROLLER_SOCKET, kmsg_failure, (size_t)msg.length);
-
-            free(module_list);
-            free_modules(&context);
-
-            exit(EXIT_FAILURE);
-          }
-          module_list = tmp_module_list;
-
-          strcpy(module_list + module_list_len, context.modules[i].name);
-
-          module_list_len += strlen(context.modules[i].name);
-        }
-      }
-    }
+    unix_datagram_sendto(CONTROLLER_SOCKET, &(uint8_t){ DAEMON_SET_INFO }, sizeof(uint8_t));
 
     char impl_name[LONGEST_ROOT_IMPL_NAME];
     stringify_root_impl_name(impl, impl_name);
 
-    size_t msg_length = strlen("Root: , Modules: ") + strlen(impl_name) + module_list_len + 1;
+    uint32_t root_impl_len = (uint32_t)strlen(impl_name);
+    unix_datagram_sendto(CONTROLLER_SOCKET, &root_impl_len, sizeof(root_impl_len));
+    unix_datagram_sendto(CONTROLLER_SOCKET, impl_name, root_impl_len);
 
-    struct MsgHead msg = {
-      .cmd = DAEMON_SET_INFO,
-      .length = (int)msg_length
-    };
+    uint32_t modules_len = (uint32_t)context.len;
+    unix_datagram_sendto(CONTROLLER_SOCKET, &modules_len, sizeof(modules_len));
 
-    char *msg_data = malloc(msg_length);
-    if (msg_data == NULL) {
-      LOGE("Failed allocating memory for message data.\n");
-
-      char *kmsg_failure = "Failed allocating memory for message data";
-      msg.cmd = DAEMON_SET_ERROR_INFO;
-      msg.length = (int)strlen(kmsg_failure) + 1;
-      unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
-      unix_datagram_sendto(CONTROLLER_SOCKET, kmsg_failure, (size_t)msg.length);
-
-      free(module_list);
-      free_modules(&context);
-
-      exit(EXIT_FAILURE);
+    for (size_t i = 0; i < context.len; i++) {
+      uint32_t module_name_len = (uint32_t)strlen(context.modules[i].name);
+      unix_datagram_sendto(CONTROLLER_SOCKET, &module_name_len, sizeof(module_name_len));
+      unix_datagram_sendto(CONTROLLER_SOCKET, context.modules[i].name, module_name_len);
     }
 
-    snprintf(msg_data, msg_length, "Root: %s, Modules: %s", impl_name, module_list);
-
-    unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
-    unix_datagram_sendto(CONTROLLER_SOCKET, msg_data, msg_length);
-
-    free(msg_data);
-    free(module_list);
+    LOGI("Sent root implementation and modules information to controller socket");
   }
 
   int socket_fd = create_daemon_socket();
@@ -427,12 +346,7 @@ void zygiskd_start(char *restrict argv[]) {
 
     switch (action) {
       case PingHeartbeat: {
-        struct MsgHead msg = {
-          .cmd = ZYGOTE_INJECTED,
-          .length = 0
-        };
-
-        unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
+        unix_datagram_sendto(CONTROLLER_SOCKET, &(uint8_t){ ZYGOTE_INJECTED }, sizeof(uint8_t));
 
         break;
       }
@@ -447,22 +361,7 @@ void zygiskd_start(char *restrict argv[]) {
         break;
       }
       case SystemServerStarted: {
-        struct MsgHead msg = {
-          .cmd = SYSTEM_SERVER_STARTED,
-          .length = 0
-        };
-
-        unix_datagram_sendto(CONTROLLER_SOCKET, &msg, sizeof(struct MsgHead));
-
-        if (impl.impl == None || impl.impl == Multiple) {
-          LOGI("Unsupported environment detected. Exiting.\n");
-
-          close(client_fd);
-          close(socket_fd);
-          free_modules(&context);
-
-          exit(1);
-        }
+        unix_datagram_sendto(CONTROLLER_SOCKET, &(uint8_t){ SYSTEM_SERVER_STARTED }, sizeof(uint8_t));
 
         break;
       }

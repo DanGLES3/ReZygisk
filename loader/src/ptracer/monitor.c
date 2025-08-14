@@ -17,6 +17,7 @@
 #include "utils.h"
 #include "daemon.h"
 #include "misc.h"
+#include "socket_utils.h"
 
 #include "monitor.h"
 
@@ -28,6 +29,15 @@
 static bool update_status(const char *message);
 
 char monitor_stop_reason[32];
+
+struct environment_information {
+  char *root_impl;
+  char **modules;
+  uint32_t modules_len;
+};
+
+static struct environment_information environment_information64;
+static struct environment_information environment_information32;
 
 enum ptracer_tracing_state {
   TRACING,
@@ -158,57 +168,26 @@ bool rezygiskd_listener_init() {
   return true;
 }
 
-struct __attribute__((__packed__)) MsgHead {
-  unsigned int cmd;
-  int length;
-};
-
 void rezygiskd_listener_callback() {
   while (1) {
-    struct MsgHead msg = { 0 };
+    uint8_t cmd;
+    ssize_t nread = TEMP_FAILURE_RETRY(read(monitor_sock_fd, &cmd, sizeof(cmd)));
+    if (nread == -1) {
+      PLOGE("read socket");
 
-    size_t nread;
-
-    again:
-      nread = read(monitor_sock_fd, &msg, sizeof(msg));
-      if ((int)nread == -1) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) goto again;
-
-        PLOGE("read socket");
-
-        continue;
-      }
-
-    char *msg_data = NULL;
-
-    if (msg.length != 0) {
-      msg_data = malloc(msg.length);
-      if (!msg_data) {
-        LOGE("malloc msg data failed");
-
-        continue;
-      }
-
-      again_msg_data:
-        nread = read(monitor_sock_fd, msg_data, msg.length);
-        if ((int)nread == -1) {
-          if (errno == EAGAIN || errno == EWOULDBLOCK) goto again_msg_data;
-
-          PLOGE("read socket");
-
-          free(msg_data);
-
-          continue;
-        }
+      continue;
     }
 
-    switch (msg.cmd) {
+    switch (cmd) {
       case START: {
-        if (tracing_state == STOPPING) tracing_state = TRACING;
-        else if (tracing_state == STOPPED) {
-          ptrace(PTRACE_SEIZE, 1, 0, PTRACE_O_TRACEFORK);
+        if (tracing_state == STOPPING) {
+          LOGI("Continue tracing init");
 
-          LOGI("start tracing init");
+          tracing_state = TRACING;
+        } else if (tracing_state == STOPPED) {
+          LOGI("Start tracing init");
+
+          ptrace(PTRACE_SEIZE, 1, 0, PTRACE_O_TRACEFORK);
 
           tracing_state = TRACING;
         }
@@ -219,7 +198,7 @@ void rezygiskd_listener_callback() {
       }
       case STOP: {
         if (tracing_state == TRACING) {
-          LOGI("stop tracing requested");
+          LOGI("Stop tracing requested");
 
           tracing_state = STOPPING;
           strcpy(monitor_stop_reason, "user requested");
@@ -231,7 +210,7 @@ void rezygiskd_listener_callback() {
         break;
       }
       case EXIT: {
-        LOGI("prepare for exit ...");
+        LOGI("Prepare for exit ...");
 
         tracing_state = EXITING;
         strcpy(monitor_stop_reason, "user requested");
@@ -241,96 +220,166 @@ void rezygiskd_listener_callback() {
 
         break;
       }
-      case ZYGOTE64_INJECTED: {
-        status64.zygote_injected = true;
-
-        update_status(NULL);
-
-        break;
-      }
+      case ZYGOTE64_INJECTED: 
       case ZYGOTE32_INJECTED: {
-        status32.zygote_injected = true;
+        LOGI("Received Zygote%s injected command", cmd == ZYGOTE64_INJECTED ? "64" : "32");
+
+        struct rezygiskd_status *status = cmd == ZYGOTE64_INJECTED ? &status64 : &status32;
+        status->zygote_injected = true;
 
         update_status(NULL);
 
         break;
       }
-      case DAEMON64_SET_INFO: {
-        LOGD("received daemon64 info %s", msg_data);
-
-        /* Will only happen if somehow the daemon restarts */
-        if (status64.daemon_info) {
-          free(status64.daemon_info);
-          status64.daemon_info = NULL;
-        }
-
-        status64.daemon_info = strdup(msg_data);
-        if (!status64.daemon_info) {
-          PLOGE("malloc daemon64 info");
-
-          break;
-        }
-
-        update_status(NULL);
-
-        break;
-      }
+      case DAEMON64_SET_INFO:
       case DAEMON32_SET_INFO: {
-        LOGD("received daemon32 info %s", msg_data);
+        LOGD("Received ReZygiskd%s info", cmd == DAEMON64_SET_INFO ? "64" : "32");
 
-        if (status32.daemon_info) {
-          free(status32.daemon_info);
-          status32.daemon_info = NULL;
-        }
-
-        status32.daemon_info = strdup(msg_data);
-        if (!status32.daemon_info) {
-          PLOGE("malloc daemon32 info");
+        uint32_t root_impl_len;
+        if (read_uint32_t(monitor_sock_fd, &root_impl_len) != sizeof(root_impl_len)) {
+          LOGE("read ReZygiskd%s root impl len", cmd == DAEMON64_SET_INFO ? "64" : "32");
 
           break;
+        }
+
+        struct environment_information *environment_information = cmd == DAEMON64_SET_INFO ? &environment_information64 : &environment_information32;
+        if (environment_information->root_impl) {
+          LOGD("freeing old ReZygiskd%s root impl", cmd == DAEMON64_SET_INFO ? "64" : "32");
+
+          free((void *)environment_information->root_impl);
+          environment_information->root_impl = NULL;
+        }
+
+        environment_information->root_impl = malloc(root_impl_len + 1);
+        if (environment_information->root_impl == NULL) {
+          PLOGE("malloc ReZygiskd%s root impl", cmd == DAEMON64_SET_INFO ? "64" : "32");
+
+          break;
+        }
+
+        if (read_loop(monitor_sock_fd, (void *)environment_information->root_impl, root_impl_len) != (ssize_t)root_impl_len) {
+          LOGE("read ReZygiskd%s root impl", cmd == DAEMON64_SET_INFO ? "64" : "32");
+
+          free((void *)environment_information->root_impl);
+          environment_information->root_impl = NULL;
+
+          break;
+        }
+
+        environment_information->root_impl[root_impl_len] = '\0';
+        LOGD("ReZygiskd%s root impl: %s", cmd == DAEMON64_SET_INFO ? "64" : "32", environment_information->root_impl);
+
+        if (read_uint32_t(monitor_sock_fd, &environment_information->modules_len) != sizeof(environment_information->modules_len)) {
+          LOGE("read ReZygiskd%s modules len", cmd == DAEMON64_SET_INFO ? "64" : "32");
+
+          free((void *)environment_information->root_impl);
+          environment_information->root_impl = NULL;
+
+          break;
+        }
+
+        if (environment_information->modules) {
+          LOGD("freeing old ReZygiskd%s modules", cmd == DAEMON64_SET_INFO ? "64" : "32");
+
+          for (size_t i = 0; i < environment_information->modules_len; i++) {
+            free((void *)environment_information->modules[i]);
+          }
+
+          free((void *)environment_information->modules);
+          environment_information->modules = NULL;
+        }
+
+        environment_information->modules = malloc(environment_information->modules_len * sizeof(char *));
+        if (environment_information->modules == NULL) {
+          PLOGE("malloc ReZygiskd%s modules", cmd == DAEMON64_SET_INFO ? "64" : "32");
+
+          free((void *)environment_information->root_impl);
+          environment_information->root_impl = NULL;
+
+          break;
+        }
+
+        for (size_t i = 0; i < environment_information->modules_len; i++) {
+          uint32_t module_name_len;
+          if (read_uint32_t(monitor_sock_fd, &module_name_len) != sizeof(module_name_len)) {
+            LOGE("read ReZygiskd%s module name len", cmd == DAEMON64_SET_INFO ? "64" : "32");
+
+            goto rezygiskd64_set_info_modules_cleanup;
+          }
+
+          environment_information->modules[i] = malloc(module_name_len + 1);
+          if (environment_information->modules[i] == NULL) {
+            PLOGE("malloc ReZygiskd%s module name", cmd == DAEMON64_SET_INFO ? "64" : "32");
+
+            goto rezygiskd64_set_info_modules_cleanup;
+          }
+
+          if (read_loop(monitor_sock_fd, (void *)environment_information->modules[i], module_name_len) != (ssize_t)module_name_len) {
+            LOGE("read ReZygiskd%s module name", cmd == DAEMON64_SET_INFO ? "64" : "32");
+
+            goto rezygiskd64_set_info_modules_cleanup;
+          }
+
+          environment_information->modules[i][module_name_len] = '\0';
+          LOGD("ReZygiskd%s module %zu: %s", cmd == DAEMON64_SET_INFO ? "64" : "32", i, environment_information->modules[i]);
+
+          continue;
+
+          rezygiskd64_set_info_modules_cleanup:
+            free((void *)environment_information->root_impl);
+            environment_information->root_impl = NULL;
+
+            for (size_t j = 0; j < i; j++) {
+              free((void *)environment_information->modules[j]);
+            }
+
+            free((void *)environment_information->modules);
+            environment_information->modules = NULL;
+
+            break;
         }
 
         update_status(NULL);
 
         break;
       }
-      case DAEMON64_SET_ERROR_INFO: {
-        LOGD("received daemon64 error info %s", msg_data);
-
-        status64.daemon_running = false;
-
-        if (status64.daemon_error_info) {
-          free(status64.daemon_error_info);
-          status64.daemon_error_info = NULL;
-        }
-
-        status64.daemon_error_info = strdup(msg_data);
-        if (!status64.daemon_error_info) {
-          PLOGE("malloc daemon64 error info");
-
-          break;
-        }
-
-        update_status(NULL);
-
-        break;
-      }
+      case DAEMON64_SET_ERROR_INFO:
       case DAEMON32_SET_ERROR_INFO: {
-        LOGD("received daemon32 error info %s", msg_data);
+        LOGD("Received ReZygiskd%s error info", cmd == DAEMON64_SET_ERROR_INFO ? "64" : "32");
 
-        status32.daemon_running = false;
-
-        if (status32.daemon_error_info) {
-          free(status32.daemon_error_info);
-          status32.daemon_error_info = NULL;
-        }
-
-        status32.daemon_error_info = strdup(msg_data);
-        if (!status32.daemon_error_info) {
-          PLOGE("malloc daemon32 error info");
+        uint32_t error_info_len;
+        if (read_uint32_t(monitor_sock_fd, &error_info_len) != sizeof(error_info_len)) {
+          LOGE("read ReZygiskd%s error info len", cmd == DAEMON64_SET_ERROR_INFO ? "64" : "32");
 
           break;
         }
+
+        struct rezygiskd_status *status = cmd == DAEMON64_SET_ERROR_INFO ? &status64 : &status32;
+        if (status->daemon_error_info) {
+          LOGD("freeing old ReZygiskd%s error info", cmd == DAEMON64_SET_ERROR_INFO ? "64" : "32");
+
+          free(status->daemon_error_info);
+          status->daemon_error_info = NULL;
+        }
+
+        status->daemon_error_info = malloc(error_info_len + 1);
+        if (status->daemon_error_info == NULL) {
+          PLOGE("malloc ReZygiskd%s error info", cmd == DAEMON64_SET_ERROR_INFO ? "64" : "32");
+
+          break;
+        }
+
+        if (read_loop(monitor_sock_fd, status->daemon_error_info, error_info_len) != (ssize_t)error_info_len) {
+          LOGE("read ReZygiskd%s error info", cmd == DAEMON64_SET_ERROR_INFO ? "64" : "32");
+
+          free(status->daemon_error_info);
+          status->daemon_error_info = NULL;
+
+          break;
+        }
+
+        status->daemon_error_info[error_info_len] = '\0';
+        LOGD("ReZygiskd%s error info: %s", cmd == DAEMON64_SET_ERROR_INFO ? "64" : "32", status->daemon_error_info);
 
         update_status(NULL);
 
@@ -346,8 +395,6 @@ void rezygiskd_listener_callback() {
         break;
       }
     }
-
-    if (msg_data) free(msg_data);
 
     break;
   }
@@ -423,51 +470,49 @@ static bool ensure_daemon_created(bool is_64bit) {
   return true;
 }
 
-#define CHECK_DAEMON_EXIT(abi)                                                   \
-  if (status##abi.supported && pid == status##abi.daemon_pid) {                  \
-    char status_str[64];                                                         \
-    parse_status(sigchld_status, status_str, sizeof(status_str));                \
-                                                                                 \
-    LOGW("daemon" #abi " pid %d exited: %s", pid, status_str);                   \
-    status##abi.daemon_running = false;                                          \
-                                                                                 \
-    if (!status##abi.daemon_error_info) {                                        \
-      status##abi.daemon_error_info = (char *)malloc(strlen(status_str) + 1);    \
-      if (!status##abi.daemon_error_info) {                                      \
-        LOGE("malloc daemon" #abi " error info failed");                         \
-                                                                                 \
-        return;                                                                  \
-      }                                                                          \
-                                                                                 \
-      memcpy(status##abi.daemon_error_info, status_str, strlen(status_str) + 1); \
-    }                                                                            \
-                                                                                 \
-    update_status(NULL);                                                         \
-    continue;                                                                    \
+#define CHECK_DAEMON_EXIT(abi)                                    \
+  if (status##abi.supported && pid == status##abi.daemon_pid) {   \
+    char status_str[64];                                          \
+    parse_status(sigchld_status, status_str, sizeof(status_str)); \
+                                                                  \
+    LOGW("daemon" #abi " pid %d exited: %s", pid, status_str);    \
+    status##abi.daemon_running = false;                           \
+                                                                  \
+    if (!status##abi.daemon_error_info) {                         \
+      status##abi.daemon_error_info = strdup(status_str);         \
+      if (!status##abi.daemon_error_info) {                       \
+        LOGE("malloc daemon" #abi " error info failed");          \
+                                                                  \
+        return;                                                   \
+      }                                                           \
+    }                                                             \
+                                                                  \
+    continue;                                                     \
   }
 
-#define PRE_INJECT(abi, is_64)                                                         \
-  if (strcmp(program, "/system/bin/app_process" # abi) == 0) {                         \
-    tracer = "./bin/zygisk-ptrace" # abi;                                              \
-                                                                                       \
-    if (should_stop_inject ## abi()) {                                                 \
-      LOGW("zygote" # abi " restart too much times, stop injecting");                  \
-                                                                                       \
-      tracing_state = STOPPING;                                                        \
-      memcpy(monitor_stop_reason, "zygote crashed", sizeof("zygote crashed"));         \
-      ptrace(PTRACE_INTERRUPT, 1, 0, 0);                                               \
-                                                                                       \
-      break;                                                                           \
-    }                                                                                  \
-    if (!ensure_daemon_created(is_64)) {                                               \
-      LOGW("daemon" #abi " not running, stop injecting");                              \
-                                                                                       \
-      tracing_state = STOPPING;                                                        \
-      memcpy(monitor_stop_reason, "daemon not running", sizeof("daemon not running")); \
-      ptrace(PTRACE_INTERRUPT, 1, 0, 0);                                               \
-                                                                                       \
-      break;                                                                           \
-    }                                                                                  \
+#define PRE_INJECT(abi, is_64)                                        \
+  if (strcmp(program, "/system/bin/app_process" # abi) == 0) {        \
+    tracer = "./bin/zygisk-ptrace" # abi;                             \
+                                                                      \
+    if (should_stop_inject ## abi()) {                                \
+      LOGW("Zygote" # abi " restart too much times, stop injecting"); \
+                                                                      \
+      tracing_state = STOPPING;                                       \
+      strcpy(monitor_stop_reason, "Zygote crashed");                  \
+      ptrace(PTRACE_INTERRUPT, 1, 0, 0);                              \
+                                                                      \
+      break;                                                          \
+    }                                                                 \
+                                                                      \
+    if (!ensure_daemon_created(is_64)) {                              \
+      LOGW("ReZygiskd " #abi "-bit not running, stop injecting");     \
+                                                                      \
+      tracing_state = STOPPING;                                       \
+      strcpy(monitor_stop_reason, "ReZygiskd not running");           \
+      ptrace(PTRACE_INTERRUPT, 1, 0, 0);                              \
+                                                                      \
+      break;                                                          \
+    }                                                                 \
   }
 
 int sigchld_signal_fd;
@@ -661,8 +706,6 @@ void sigchld_listener_callback() {
               }
             }
           } while (false);
-
-          update_status(NULL);
         } else {
           char status_str[64];
           parse_status(sigchld_status, status_str, sizeof(status_str));
@@ -702,27 +745,20 @@ static char post_section[1024];
 
 #define WRITE_STATUS_ABI(suffix)                                                     \
   if (status ## suffix.supported) {                                                  \
-    strcat(status_text, " zygote" # suffix ": ");                                    \
-    if (tracing_state != TRACING) strcat(status_text, "❓ unknown, ");               \
-    else if (status ## suffix.zygote_injected) strcat(status_text, "😋 injected, "); \
-    else strcat(status_text, "❌ not injected, ");                                   \
+    strcat(status_text, ", ReZygisk " # suffix "-bit: ");                            \
                                                                                      \
-    strcat(status_text, "daemon" # suffix ": ");                                     \
-    if (status ## suffix.daemon_running) {                                           \
-      strcat(status_text, "😋 running ");                                            \
+    if (tracing_state != TRACING) strcat(status_text, "❌");                         \
+    else if (status ## suffix.zygote_injected && status ## suffix.daemon_running)    \
+      strcat(status_text, "✅");                                                     \
+    else strcat(status_text, "⚠️");                                                  \
                                                                                      \
-      if (status ## suffix.daemon_info != NULL) {                                    \
-        strcat(status_text, "(");                                                    \
-        strcat(status_text, status ## suffix.daemon_info);                           \
-        strcat(status_text, ")");                                                    \
-      }                                                                              \
-    } else {                                                                         \
-      strcat(status_text, "❌ crashed ");                                            \
-                                                                                     \
-      if (status ## suffix.daemon_error_info != NULL) {                              \
-        strcat(status_text, "(");                                                    \
+    if (!status ## suffix.daemon_running) {                                          \
+      if (status ## suffix.daemon_error_info) {                                      \
+        strcat(status_text, "(ReZygiskd: ");                                         \
         strcat(status_text, status ## suffix.daemon_error_info);                     \
         strcat(status_text, ")");                                                    \
+      } else {                                                                       \
+        strcat(status_text, "(ReZygiskd: not running)");                             \
       }                                                                              \
     }                                                                                \
   }
@@ -742,40 +778,105 @@ static bool update_status(const char *message) {
     return true;
   }
 
-  char status_text[1024] = "monitor: ";
-
+  char status_text[256] = "Monitor: ";
   switch (tracing_state) {
     case TRACING: {
-      strcat(status_text, "😋 tracing");
+      strcat(status_text, "✅");
 
       break;
     }
     case STOPPING: [[fallthrough]];
     case STOPPED: {
-      strcat(status_text, "❌ stopped");
+      strcat(status_text, "⛔");
 
       break;
     }
     case EXITING: {
-      strcat(status_text, "❌ exited");
+      strcat(status_text, "❌");
 
       break;
     }
   }
-
-  if (tracing_state != TRACING && monitor_stop_reason[0] != '\0') {
-    strcat(status_text, " (");
-    strcat(status_text, monitor_stop_reason);
-    strcat(status_text, ")");
-  }
-  strcat(status_text, ",");
 
   WRITE_STATUS_ABI(64)
   WRITE_STATUS_ABI(32)
 
   fprintf(prop, "%s[%s] %s", pre_section, status_text, post_section);
-
   fclose(prop);
+
+  if (environment_information64.root_impl || environment_information32.root_impl) {
+    FILE *json = fopen("/data/adb/rezygisk/state.json", "w");
+    if (json == NULL) {
+      PLOGE("failed to open state.json");
+
+      return false;
+    }
+
+    fprintf(json, "{\n");
+    fprintf(json, "  \"root\": \"%s\",\n", environment_information64.root_impl ? environment_information64.root_impl : environment_information32.root_impl);
+
+    fprintf(json, "  \"monitor\": {\n");
+    fprintf(json, "    \"state\": \"%d\"", tracing_state);
+    if (monitor_stop_reason[0] != '\0') fprintf(json, ",\n    \"reason\": \"%s\",\n", monitor_stop_reason);
+    else fprintf(json, "\n");
+    fprintf(json, "  },\n");
+
+
+    fprintf(json, "  \"rezygiskd\": {\n");
+    if (status64.supported) {
+      fprintf(json, "    \"64\": {\n");
+      fprintf(json, "      \"state\": %d,\n", status64.daemon_running);
+      if (status64.daemon_error_info) fprintf(json, "      \"reason\": \"%s\",\n", status64.daemon_error_info);
+      fprintf(json, "      \"modules\": [");
+
+      if (environment_information64.modules) for (uint32_t i = 0; i < environment_information64.modules_len; i++) {
+        if (i > 0) fprintf(json, ", ");
+        fprintf(json, "\"%s\"", environment_information64.modules[i]);
+      }
+
+      fprintf(json, "]\n");
+      fprintf(json, "    }");
+      if (status32.supported) fprintf(json, ",\n");
+      else fprintf(json, "\n");
+    }
+
+    if (status32.supported) {
+      fprintf(json, "    \"32\": {\n");
+      fprintf(json, "      \"state\": %d,\n", status32.daemon_running);
+      if (status32.daemon_error_info) fprintf(json, "      \"reason\": \"%s\",\n", status32.daemon_error_info);
+      fprintf(json, "      \"modules\": [");
+
+      if (environment_information32.modules) for (uint32_t i = 0; i < environment_information32.modules_len; i++) {
+        if (i > 0) fprintf(json, ", ");
+        fprintf(json, "\"%s\"", environment_information32.modules[i]);
+      }
+
+      fprintf(json, "]\n");
+      fprintf(json, "    }\n");
+    }
+
+    fprintf(json, "  },\n");
+
+    fprintf(json, "  \"zygote\": {\n");
+    if (status64.supported) {
+      fprintf(json, "    \"64\": %d", status64.zygote_injected);
+      if (status32.zygote_injected) fprintf(json, ",\n");
+      else fprintf(json, "\n");
+    }
+    if (status32.zygote_injected) {
+      fprintf(json, "    \"32\": %d\n", status32.zygote_injected);
+    }
+    fprintf(json, "  }\n");
+    fprintf(json, "}\n");
+
+    fclose(json);
+  } else {
+    if (remove("/data/adb/rezygisk/state.json") == -1) {
+      PLOGE("failed to remove state.json");
+    }
+  }
+
+  LOGI("status updated: %s", status_text);
 
   return true;
 }
@@ -821,7 +922,7 @@ static bool prepare_environment() {
     return false;
   }
 
-  return update_status(NULL);
+  return true;
 }
 
 void init_monitor() {
@@ -864,7 +965,23 @@ void init_monitor() {
   if (status32.daemon_info) free(status32.daemon_info);
   if (status32.daemon_error_info) free(status32.daemon_error_info);
 
-  LOGI("exit");
+  if (environment_information64.root_impl) free((void *)environment_information64.root_impl);
+  if (environment_information64.modules) {
+    for (uint32_t i = 0; i < environment_information64.modules_len; i++) {
+      free((void *)environment_information64.modules[i]);
+    }
+    free((void *)environment_information64.modules);
+  }
+
+  if (environment_information32.root_impl) free((void *)environment_information32.root_impl);
+  if (environment_information32.modules) {
+    for (uint32_t i = 0; i < environment_information32.modules_len; i++) {
+      free((void *)environment_information32.modules[i]);
+    }
+    free((void *)environment_information32.modules);
+  }
+
+  LOGI("Terminating ReZygisk monitor");
 }
 
 int send_control_command(enum rezygiskd_command cmd) {
@@ -880,9 +997,10 @@ int send_control_command(enum rezygiskd_command cmd) {
 
   socklen_t socklen = sizeof(sa_family_t) + sun_path_len;
 
-  ssize_t nsend = sendto(sockfd, (void *)&cmd, sizeof(cmd), 0, (struct sockaddr *)&addr, socklen);
+  uint8_t cmd_op = cmd;
+  ssize_t nsend = sendto(sockfd, (void *)&cmd_op, sizeof(cmd_op), 0, (struct sockaddr *)&addr, socklen);
 
   close(sockfd);
 
-  return nsend != sizeof(cmd) ? -1 : 0;
+  return nsend != sizeof(cmd_op) ? -1 : 0;
 }

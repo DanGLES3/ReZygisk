@@ -91,101 +91,106 @@ async function getModuleNames(modules) {
   const unameCmd = await exec('/system/bin/uname -r')
   if (unameCmd.errno !== 0) return setError('WebUI', unameCmd.stderr)
 
-  document.getElementById('kernel_version_div').innerHTML = unameCmd.stdout
-  console.log('[rezygisk.js] Kernel version: ', unameCmd.stdout)
+  document.getElementById('kernel_version_div').innerHTML = unameCmd.stdout.trim()
+  console.log('[rezygisk.js] Kernel version: ', unameCmd.stdout.trim())
 
   const catCmd = await exec('/system/bin/cat /data/adb/rezygisk/module.prop')
   console.log(`[rezygisk.js] ReZygisk module infomation:\n${catCmd.stdout}`)
 
-  let expectedWorking = 0
-  let actuallyWorking = 0
+  if (catCmd.errno !== 0) {
+    console.error('[rezygisk.js] Failed to retrieve ReZygisk module information:', catCmd.stderr)
 
-  const ReZygiskInfo = {
-    rootImpl: null,
-    monitor: null,
-    zygotes: [],
-    daemons: []
-  }
+    rezygisk_state.innerHTML = translations.page.home.status.notWorking
+    rezygisk_icon_state.innerHTML = '<img class="dimc" src="assets/cross.svg">'
 
-  if (catCmd.errno === 0) {
-    /* INFO: Just ensure that they won't appear unless there's info */
+    rootCss.style.setProperty('--bright', '#766000')
+
+    /* INFO: Hide zygote divs */
     zygote_divs.forEach((zygote_div) => {
       zygote_div.style.display = 'none'
     })
 
-    version.innerHTML = catCmd.stdout.split('\n').find((line) => line.startsWith('version=')).substring('version='.length).trim()
+    loading_screen.style.display = 'none'
+    bottom_nav.style.display = 'flex'
 
-    let moduleInfo = catCmd.stdout.split('\n').find((line) => line.startsWith('description=')).substring('description='.length).split('[')[1].split(']')[0]
+    return;
+  }
 
-    const daemonModules = []
-    moduleInfo.match(/\(([^)]+)\)/g).forEach((area) => {
-      moduleInfo = moduleInfo.replace(area, ',')
+  /* INFO: Just ensure that they won't appear unless there's info */
+  zygote_divs.forEach((zygote_div) => {
+    zygote_div.style.display = 'none'
+  })
 
-      const info = area.substring(1, area.length - 1).split(', ')
-      if (info.length === 1) return; /* INFO: undefined as object */
+  version.innerHTML = catCmd.stdout.split('\n').find((line) => line.startsWith('version=')).substring('version='.length).trim()
 
-      const rootImpl = info[0].substring('Root: '.length)
+  const stateCmd = await exec('/system/bin/cat /data/adb/rezygisk/state.json')
+  if (stateCmd.errno !== 0) {
+    console.error('[rezygisk.js] Failed to retrieve ReZygisk state information:', stateCmd.stderr)
 
-      info[1] = info[1].substring('Modules: '.length)
-      const modules = info.slice(1, info.length)
+    rezygisk_state.innerHTML = translations.page.home.status.notWorking
+    rezygisk_icon_state.innerHTML = '<img class="dimc" src="assets/cross.svg">'
 
-      ReZygiskInfo.rootImpl = rootImpl
-      if (modules[0] !== 'None') daemonModules.push(modules)
+    rootCss.style.setProperty('--bright', '#766000')
+
+    /* INFO: Hide zygote divs */
+    zygote_divs.forEach((zygote_div) => {
+      zygote_div.style.display = 'none'
     })
 
-    const infoArea = moduleInfo.split(', ')
-    infoArea.forEach((info) => {
-      if (info.startsWith('monitor:')) {
-        ReZygiskInfo.monitor = info.substring('monitor: X '.length).trim()
-      }
+    loading_screen.style.display = 'none'
+    bottom_nav.style.display = 'flex'
 
-      if (info.startsWith('zygote')) {
-        ReZygiskInfo.zygotes.push({
-          bits: info.substring('zygote'.length, 'zygote'.length + 'XX'.length),
-          state: info.substring('zygoteXX: X '.length).trim()
-        })
-      }
+    return;
+  }
 
-      if (info.startsWith('daemon')) {
-        ReZygiskInfo.daemons.push({
-          bits: info.substring('daemon'.length, 'daemon'.length + 'XX'.length),
-          state: info.substring('daemonXX: X '.length).trim(),
-          modules: daemonModules[ReZygiskInfo.daemons.length] || []
-        })
-      }
-    })
+  const ReZygiskState = JSON.parse(stateCmd.stdout)
 
-    switch (ReZygiskInfo.monitor) {
-      case 'tracing': monitor_status.innerHTML = translations.page.actions.status.tracing; break;
-      case 'stopping': monitor_status.innerHTML = translations.page.actions.status.stopping; break;
-      case 'stopped': monitor_status.innerHTML = translations.page.actions.status.stopped; break;
-      case 'exiting': monitor_status.innerHTML = translations.page.actions.status.exiting; break;
-      default: monitor_status.innerHTML = translations.page.actions.status.unknown;
+  root_impl.innerHTML = ReZygiskState.root
+
+  switch (ReZygiskState.monitor.state) {
+    case 0: monitor_status.innerHTML = translations.page.actions.status.tracing; break;
+    case 1: monitor_status.innerHTML = translations.page.actions.status.stopping; break;
+    case 2: monitor_status.innerHTML = translations.page.actions.status.stopped; break;
+    case 3: monitor_status.innerHTML = translations.page.actions.status.exiting; break;
+    default: monitor_status.innerHTML = translations.page.actions.status.unknown;
+  }
+
+  const expectedWorking = (ReZygiskState.zygote['64'] !== undefined ? 1 : 0) + (ReZygiskState.zygote['32'] !== undefined ? 1 : 0)
+  let actuallyWorking = 0
+
+  if (ReZygiskState.zygote['64'] !== undefined) {
+    const zygote64 = ReZygiskState.zygote['64']
+
+    zygote_divs[0].style.display = 'block'
+
+    switch (zygote64) {
+      case 0: {
+        zygote_status_divs[0].innerHTML = translations.page.home.info.zygote.injected
+
+        actuallyWorking++
+
+        break
+      }
+      case 1: zygote_status_divs[0].innerHTML = translations.page.home.info.zygote.notInjected; break
+      default: zygote_status_divs[0].innerHTML = translations.page.home.info.zygote.unknown
     }
+  }
 
-    expectedWorking = ReZygiskInfo.zygotes.length
+  if (ReZygiskState.zygote['32'] !== undefined) {
+    const zygote32 = ReZygiskState.zygote['32']
 
-    for (let i = 0; i < ReZygiskInfo.zygotes.length; i++) {
-      const zygote = ReZygiskInfo.zygotes[i]
-      /* INFO: Not used ATM */
-      /* const daemon = ReZygiskInfo.daemons[i] */
+    zygote_divs[1].style.display = 'block'
 
-      const zygoteDiv = zygote_divs[zygote.bits === '64' ? 0 : 1]
-      const zygoteStatusDiv = zygote_status_divs[zygote.bits === '64' ? 0 : 1]
+    switch (zygote32) {
+      case 0: {
+        zygote_status_divs[1].innerHTML = translations.page.home.info.zygote.injected
 
-      zygoteDiv.style.display = 'block'
+        actuallyWorking++
 
-      switch (zygote.state) {
-        case 'injected': {
-          zygoteStatusDiv.innerHTML = translations.page.home.info.zygote.injected;
-
-          actuallyWorking++
-
-          break;
-        }
-        case 'not injected': zygoteStatusDiv.innerHTML = translations.page.home.info.zygote.notInjected; break;
-        default: zygoteStatusDiv.innerHTML = translations.page.home.info.zygote.unknown;
+        break
       }
+      case 1: zygote_status_divs[1].innerHTML = translations.page.home.info.zygote.notInjected; break
+      default: zygote_status_divs[1].innerHTML = translations.page.home.info.zygote.unknown
     }
   }
 
@@ -203,24 +208,24 @@ async function getModuleNames(modules) {
     rezygisk_icon_state.innerHTML = '<img class="brightc" src="assets/warn.svg">'
   }
 
-  if (ReZygiskInfo.rootImpl)
-    root_impl.innerHTML = ReZygiskInfo.rootImpl
-
   const all_modules = []
-  ReZygiskInfo.daemons.forEach((daemon) => {
-    daemon.modules.forEach((module_id) => {
-      const module = all_modules.find((mod) => mod.id === module_id)
+  Object.keys(ReZygiskState.rezygiskd).forEach((daemon_bit) => {
+    const daemon = ReZygiskState.rezygiskd[daemon_bit]
 
-      if (module) {
-        module.bitsUsed.push(daemon.bits)
-      } else {
-        all_modules.push({
-          id: module_id,
-          name: null,
-          bitsUsed: [ daemon.bits ]
-        })
-      }
-    })
+    if (daemon.modules && daemon.modules.length > 0) {
+      daemon.modules.forEach((module_id) => {
+        const module = all_modules.find((mod) => mod.id === module_id)
+        if (module) {
+          module.bitsUsed.push(daemon_bit)
+        } else {
+          all_modules.push({
+            id: module_id,
+            name: null,
+            bitsUsed: [ daemon_bit ]
+          })
+        }
+      })
+    }
   })
 
   if (all_modules.length !== 0) {
@@ -250,7 +255,6 @@ async function getModuleNames(modules) {
   /* INFO: This hides the throbber screen */
   loading_screen.style.display = 'none'
   bottom_nav.style.display = 'flex'
-
 
   const start_time = Number(localStorage.getItem('/system/boot-time'))
   console.log('[rezygisk.js] boot time: ', Date.now() - start_time, 'ms')
