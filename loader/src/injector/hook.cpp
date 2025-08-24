@@ -881,7 +881,7 @@ void ZygiskContext::app_specialize_pre() {
     if (in_denylist) {
         flags[DO_REVERT_UNMOUNT] = true;
 
-        update_mnt_ns(Clean, false);
+        update_mnt_ns(Clean, false, false);
     }
 
     /* INFO: Executed after setns to ensure a module can update the mounts of an 
@@ -898,7 +898,7 @@ void ZygiskContext::app_specialize_pre() {
                 the chance to request it.
     */
     if (!in_denylist && flags[DO_REVERT_UNMOUNT])
-        update_mnt_ns(Clean, false);
+        update_mnt_ns(Clean, false, false);
 }
 
 
