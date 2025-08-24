@@ -859,52 +859,52 @@ void ZygiskContext::app_specialize_pre() {
                    if Zygisk is enabled.
         */
         setenv("ZYGISK_ENABLED", "1", 1);
-    } else {
-        /* INFO: Because we load directly from the file, we need to do it before we umount
-                   the mounts, or else it won't have access to /data/adb anymore.
-        */
-        if (!load_modules_only()) {
-            LOGE("Failed to load modules");
-
-            return;
-        }
-
-        /* INFO: Modules only have two "start off" points from Zygisk, preSpecialize and
-                   postSpecialize. In preSpecialize, the process still has privileged 
-                   permissions, and therefore can execute mount/umount/setns functions.
-                   If we update the mount namespace AFTER executing them, any mounts made
-                   will be lost, and the process will not have access to them anymore.
-
-                 In postSpecialize, while still could have its mounts modified with the
-                   assistance of a Zygisk companion, it will already have the mount
-                   namespace switched by then, so there won't be issues.
-
-                 Knowing this, we update the mns before execution, so that they can still
-                   make changes to mounts in DenyListed processes without being reverted.
-        */
-        bool in_denylist = (info_flags & PROCESS_ON_DENYLIST) == PROCESS_ON_DENYLIST;
-        if (in_denylist) {
-            flags[DO_REVERT_UNMOUNT] = true;
-
-            update_mnt_ns(Clean, false, false);
-        }
-
-        /* INFO: Executed after setns to ensure a module can update the mounts of an 
-                   application without worrying about it being overwritten by setns.
-        */
-        run_modules_pre();
-
-        /* INFO: The modules may request that although the process is NOT in
-                   the DenyList, it has its mount namespace switched to the clean
-                   one.
-
-                 So to ensure this behavior happens, we must also check after the
-                   modules are loaded and executed, so that the modules can have
-                   the chance to request it.
-        */
-        if (!in_denylist && flags[DO_REVERT_UNMOUNT])
-            update_mnt_ns(Clean, false, false);
     }
+
+    /* INFO: Because we load directly from the file, we need to do it before we umount
+                the mounts, or else it won't have access to /data/adb anymore.
+    */
+    if (!load_modules_only()) {
+        LOGE("Failed to load modules");
+
+        return;
+    }
+
+    /* INFO: Modules only have two "start off" points from Zygisk, preSpecialize and
+                postSpecialize. In preSpecialize, the process still has privileged 
+                permissions, and therefore can execute mount/umount/setns functions.
+                If we update the mount namespace AFTER executing them, any mounts made
+                will be lost, and the process will not have access to them anymore.
+
+                In postSpecialize, while still could have its mounts modified with the
+                assistance of a Zygisk companion, it will already have the mount
+                namespace switched by then, so there won't be issues.
+
+                Knowing this, we update the mns before execution, so that they can still
+                make changes to mounts in DenyListed processes without being reverted.
+    */
+    bool in_denylist = (info_flags & PROCESS_ON_DENYLIST) == PROCESS_ON_DENYLIST;
+    if (in_denylist) {
+        flags[DO_REVERT_UNMOUNT] = true;
+
+        update_mnt_ns(Clean, false);
+    }
+
+    /* INFO: Executed after setns to ensure a module can update the mounts of an 
+                application without worrying about it being overwritten by setns.
+    */
+    run_modules_pre();
+
+    /* INFO: The modules may request that although the process is NOT in
+                the DenyList, it has its mount namespace switched to the clean
+                one.
+
+                So to ensure this behavior happens, we must also check after the
+                modules are loaded and executed, so that the modules can have
+                the chance to request it.
+    */
+    if (!in_denylist && flags[DO_REVERT_UNMOUNT])
+        update_mnt_ns(Clean, false);
 }
 
 
