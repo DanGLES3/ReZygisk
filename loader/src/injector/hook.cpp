@@ -67,7 +67,6 @@ struct ZygiskContext {
     } args;
 
     const char *process;
-    list<ZygiskModule> modules;
 
     int pid;
     bitset<FLAG_MAX> flags;
@@ -125,6 +124,10 @@ struct ZygiskContext {
 // Global variables
 vector<tuple<dev_t, ino_t, const char *, void **>> *plt_hook_list;
 map<string, vector<JNINativeMethod>> *jni_hook_list;
+
+bool modules_loaded = false;
+list<ZygiskModule> modules;
+
 bool should_unmap_zygisk = false;
 bool enable_unloader = false;
 bool hooked_unloader = false;
@@ -861,15 +864,6 @@ void ZygiskContext::app_specialize_pre() {
         setenv("ZYGISK_ENABLED", "1", 1);
     }
 
-    /* INFO: Because we load directly from the file, we need to do it before we umount
-                the mounts, or else it won't have access to /data/adb anymore.
-    */
-    if (!load_modules_only()) {
-        LOGE("Failed to load modules");
-
-        return;
-    }
-
     /* INFO: Modules only have two "start off" points from Zygisk, preSpecialize and
                 postSpecialize. In preSpecialize, the process still has privileged 
                 permissions, and therefore can execute mount/umount/setns functions.
@@ -945,11 +939,15 @@ void ZygiskContext::nativeForkSystemServer_pre() {
     LOGV("pre forkSystemServer");
     flags[SERVER_FORK_AND_SPECIALIZE] = true;
 
+    if (!modules_loaded) {
+        load_modules_only();
+        modules_loaded = true;
+    }
+
     fork_pre();
     if (!is_child())
       return;
 
-    load_modules_only();
     run_modules_pre();
     rezygiskd_system_server_started();
 
