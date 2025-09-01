@@ -1,5 +1,6 @@
 #include <sys/mount.h>
 #include <dlfcn.h>
+#include <link.h>
 #include <regex.h>
 #include <bitset>
 #include <list>
@@ -21,12 +22,12 @@
 
 #include "daemon.h"
 #include "zygisk.hpp"
-#include "module.hpp"
+#include "module.h"
 #include "misc.h"
 
 #include "solist.h"
 
-#include "art_method.hpp"
+#include "art_method.h"
 
 using namespace std;
 
@@ -61,8 +62,8 @@ struct ZygiskContext {
     JNIEnv *env;
     union {
         void *ptr;
-        AppSpecializeArgs_v5 *app;
-        ServerSpecializeArgs_v1 *server;
+        struct app_specialize_args_v5 *app;
+        struct server_specialize_args_v1 *server;
     } args;
 
     const char *process;
@@ -125,7 +126,8 @@ vector<tuple<dev_t, ino_t, const char *, void **>> *plt_hook_list;
 map<string, vector<JNINativeMethod>> *jni_hook_list;
 
 bool modules_loaded = false;
-list<ZygiskModule> modules;
+struct rezygisk_module *zygisk_modules = NULL;
+size_t zygisk_module_length = 0;
 
 bool should_unmap_zygisk = false;
 bool enable_unloader = false;
@@ -245,6 +247,10 @@ DCL_HOOK_FUNC(int, pthread_attr_setstacksize, void *target, size_t size) {
     if (should_unmap_zygisk) {
         unhook_functions();
 
+        /* INFO: Modules might use libzygisk.so after postAppSpecialize. We can only
+                   free it when we are really before our unmap. */
+        free(zygisk_modules);
+
         lsplt_free_resources();
 
         if (should_unmap_zygisk) {
@@ -326,21 +332,23 @@ void hookJniNativeMethods(JNIEnv *env, const char *clz, JNINativeMethod *methods
             nm.fnPtr = nullptr;
             continue;
         }
-        auto method = lsplant::JNI_ToReflectedMethod(env, clazz, mid, is_static);
-        auto modifier = lsplant::JNI_CallIntMethod(env, method, member_getModifiers);
+        auto method = env->ToReflectedMethod(clazz, mid, is_static);
+        auto modifier = env->CallIntMethod(method, member_getModifiers);
         if ((modifier & MODIFIER_NATIVE) == 0) {
             nm.fnPtr = nullptr;
             continue;
         }
-        auto artMethod = lsplant::art::ArtMethod::FromReflectedMethod(env, method);
+        auto artMethod = amethod_from_reflected_method(env, method);
         hooks.push_back(nm);
-        auto orig = artMethod->GetData();
+        auto orig = amethod_get_data((uintptr_t)artMethod);
         LOGV("replaced %s %s orig %p", clz, nm.name, orig);
         nm.fnPtr = orig;
     }
 
     if (hooks.empty()) return;
     env->RegisterNatives(clazz, hooks.data(), hooks.size());
+
+    env->DeleteLocalRef(clazz);
 }
 
 // JNI method hook definitions, auto generated
@@ -386,16 +394,21 @@ void initialize_jni_hook() {
     res = vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
     if (res != JNI_OK || env == nullptr) return;
 
-    auto classMember = lsplant::JNI_FindClass(env, "java/lang/reflect/Member");
-    if (classMember != nullptr) member_getModifiers = lsplant::JNI_GetMethodID(env, classMember, "getModifiers", "()I");
-    auto classModifier = lsplant::JNI_FindClass(env, "java/lang/reflect/Modifier");
+    auto classMember = env->FindClass("java/lang/reflect/Member");
+    if (classMember != nullptr) member_getModifiers = env->GetMethodID(classMember, "getModifiers", "()I");
+    auto classModifier = env->FindClass("java/lang/reflect/Modifier");
     if (classModifier != nullptr) {
-        auto fieldId = lsplant::JNI_GetStaticFieldID(env, classModifier, "NATIVE", "I");
-        if (fieldId != nullptr) MODIFIER_NATIVE = lsplant::JNI_GetStaticIntField(env, classModifier, fieldId);
+        auto fieldId = env->GetStaticFieldID(classModifier, "NATIVE", "I");
+        if (fieldId != nullptr) MODIFIER_NATIVE = env->GetStaticIntField(classModifier, fieldId);
     }
+
+    env->DeleteLocalRef(classMember);
+    env->DeleteLocalRef(classModifier);
+
     if (member_getModifiers == nullptr || MODIFIER_NATIVE == 0) return;
-    if (!lsplant::art::ArtMethod::Init(env)) {
-        LOGE("failed to init ArtMethod");
+    if (!amethod_init(env)) {
+        LOGE("failed to init amethod");
+
         return;
     }
 
@@ -405,51 +418,90 @@ void initialize_jni_hook() {
 
 // -----------------------------------------------------------------
 
-ZygiskModule::ZygiskModule(int id, void *handle, void *entry)
-: id(id), handle(handle), entry{entry}, api{}, mod{nullptr} {
-    // Make sure all pointers are null
-    memset(&api, 0, sizeof(api));
-    api.base.impl = this;
-    api.base.registerModule = &ZygiskModule::RegisterModuleImpl;
-}
-
-bool ZygiskModule::RegisterModuleImpl(ApiTable *api, long *module) {
+bool rezygisk_module_register(struct rezygisk_api *api, struct rezygisk_abi *module) {
     if (api == nullptr || module == nullptr)
         return false;
 
-    long api_version = *module;
-    // Unsupported version
-    if (api_version > ZYGISK_API_VERSION)
+    if (module->api_version > REZYGISK_API_VERSION)
         return false;
 
-    // Set the actual module_abi*
-    api->base.impl->mod = { module };
+    struct rezygisk_module *m = &zygisk_modules[(size_t)api->impl];
+    m->abi = *module;
+    m->api = *api;
 
-    // Fill in API accordingly with module API version
-    if (api_version >= 1) {
-        api->v1.hookJniNativeMethods = hookJniNativeMethods;
-        api->v1.pltHookRegister = [](auto a, auto b, auto c, auto d) {
-            if (g_ctx) g_ctx->plt_hook_register(a, b, c, d);
-        };
-        api->v1.pltHookExclude = [](auto a, auto b) {
-            if (g_ctx) g_ctx->plt_hook_exclude(a, b);
-        };
-        api->v1.pltHookCommit = []() { return g_ctx && g_ctx->plt_hook_commit(); };
-        api->v1.connectCompanion = [](ZygiskModule *m) { return m->connectCompanion(); };
-        api->v1.setOption = [](ZygiskModule *m, auto opt) { m->setOption(opt); };
-    }
-    if (api_version >= 2) {
-        api->v2.getModuleDir = [](ZygiskModule *m) { return m->getModuleDir(); };
-        api->v2.getFlags = [](auto) { return ZygiskModule::getFlags(); };
-    }
-    if (api_version >= 4) {
-        api->v4.pltHookCommit = []() { return lsplt_commit_hook(); };
-        api->v4.pltHookRegister = [](dev_t dev, ino_t inode, const char *symbol, void *fn, void **backup) {
-            if (dev == 0 || inode == 0 || symbol == nullptr || fn == nullptr)
+    api->hook_jni_native_methods = hookJniNativeMethods;
+    if (module->api_version >= 4) {
+        api->plt_hook_register_v4 = [](dev_t dev, ino_t inode, const char *symbol, void *fn, void **backup) {
+            if (dev == 0 || inode == 0 || symbol == NULL || fn == NULL) {
+                LOGE("Invalid arguments to plt_hook_register");
+
                 return;
+            }
+
             lsplt_register_hook(dev, inode, symbol, fn, backup);
         };
-        api->v4.exemptFd = [](int fd) { return g_ctx && g_ctx->exempt_fd(fd); };
+        api->exempt_fd = [](int fd) {
+            if (g_ctx) g_ctx->exempt_fd(fd);
+        };
+        api->plt_hook_commit = []() {
+            return lsplt_commit_hook();
+        };
+    } else {
+        api->plt_hook_register = [](const char *regex, const char *symbol, void *fn, void **backup) {
+            if (g_ctx) g_ctx->plt_hook_register(regex, symbol, fn, backup);
+        };
+        api->plt_hook_exclude = [](const char *regex, const char *symbol) {
+            if (g_ctx) g_ctx->plt_hook_exclude(regex, symbol);
+        };
+        api->plt_hook_commit = []() {
+            return g_ctx && g_ctx->plt_hook_commit();
+        };
+    }
+    api->connect_companion = [](void *id) {
+        if ((size_t)id >= zygisk_module_length) {
+            LOGE("Invalid module id %zu", (size_t)id);
+
+            return -1;
+        }
+
+        return rezygiskd_connect_companion((size_t)id);
+    };
+    api->set_option = [](void *id, enum rezygisk_options opt) {
+        if (!g_ctx) return;
+
+        if ((size_t)id >= zygisk_module_length) {
+            LOGE("Invalid module id %zu", (size_t)id);
+
+            return;
+        }
+
+        switch (opt) {
+            case FORCE_DENYLIST_UNMOUNT: {
+                g_ctx->flags[DO_REVERT_UNMOUNT] = true;
+
+                break;
+            }
+            case DLCLOSE_MODULE_LIBRARY: {
+                struct rezygisk_module *m = &zygisk_modules[(size_t)id];
+                m->unload = true;
+
+                break;
+            }
+        }
+    };
+    if (module->api_version >= 2) {
+        api->get_module_dir = [](void *id) {
+            if ((size_t)id >= zygisk_module_length) {
+                LOGE("Invalid module id %zu", (size_t)id);
+
+                return -1;
+            }
+
+            return rezygiskd_get_module_dir((size_t)id);
+        };
+        api->get_flags = []() {
+            return g_ctx ? (g_ctx->info_flags & ~PRIVATE_MASK) : 0;
+        };
     }
 
     return true;
@@ -524,49 +576,6 @@ bool ZygiskContext::plt_hook_commit() {
     return lsplt_commit_hook();
 }
 
-
-bool ZygiskModule::valid() const {
-    if (mod.api_version == nullptr)
-        return false;
-    switch (*mod.api_version) {
-        case 4:
-        case 3:
-        case 2:
-        case 1:
-            return mod.v1->impl && mod.v1->preAppSpecialize && mod.v1->postAppSpecialize &&
-                   mod.v1->preServerSpecialize && mod.v1->postServerSpecialize;
-        default:
-            return false;
-    }
-}
-
-/* Zygisksu changed: Use own zygiskd */
-int ZygiskModule::connectCompanion() const {
-    return rezygiskd_connect_companion(id);
-}
-
-/* Zygisksu changed: Use own zygiskd */
-int ZygiskModule::getModuleDir() const {
-    return rezygiskd_get_module_dir(id);
-}
-
-void ZygiskModule::setOption(zygisk::Option opt) {
-    if (g_ctx == nullptr)
-        return;
-    switch (opt) {
-    case zygisk::FORCE_DENYLIST_UNMOUNT:
-        g_ctx->flags[DO_REVERT_UNMOUNT] = true;
-        break;
-    case zygisk::DLCLOSE_MODULE_LIBRARY:
-        unload = true;
-        break;
-    }
-}
-
-uint32_t ZygiskModule::getFlags() {
-    return g_ctx ? (g_ctx->info_flags & ~PRIVATE_MASK) : 0;
-}
-
 // -----------------------------------------------------------------
 
 int sigmask(int how, int signum) {
@@ -630,8 +639,14 @@ void ZygiskContext::sanitize_fds() {
                     allowed_fds[fd] = true;
                 }
             }
+
+            jintArray old_array = *args.app->fds_to_ignore;
+
             *args.app->fds_to_ignore = array;
             flags[SKIP_FD_SANITIZATION] = true;
+
+            env->DeleteLocalRef(old_array);
+
             return array;
         };
 
@@ -692,6 +707,15 @@ bool ZygiskContext::load_modules_only() {
     return false;
   }
 
+  zygisk_modules = (struct rezygisk_module *)malloc(ms.modules_count * sizeof(struct rezygisk_module));
+  if (!zygisk_modules) {
+    LOGE("Failed to allocate memory for modules");
+
+    free_modules(&ms);
+
+    return false;
+  }
+
   for (size_t i = 0; i < ms.modules_count; i++) {
     char *lib_path = ms.modules[i];
 
@@ -711,7 +735,16 @@ bool ZygiskContext::load_modules_only() {
       continue;
     }
 
-    modules.emplace_back(i, handle, entry);
+    zygisk_modules[zygisk_module_length].handle = handle;
+    zygisk_modules[zygisk_module_length].zygisk_module_entry = (void (*)(void *, void *))entry;
+
+    zygisk_modules[zygisk_module_length].api.register_module = rezygisk_module_register;
+    zygisk_modules[zygisk_module_length].api.impl = (void *)zygisk_module_length;
+
+    zygisk_module_length++;
+
+    /* INFO: The module will call register module function, so by then, it must be fully registered. */
+    rezygisk_module_call_on_load(&zygisk_modules[zygisk_module_length - 1], env);
   }
 
   free_modules(&ms);
@@ -721,11 +754,9 @@ bool ZygiskContext::load_modules_only() {
 
 /* Zygisksu changed: Load module fds */
 void ZygiskContext::run_modules_pre() {
-  for (auto &m : modules) {
-    m.onLoad(env);
-
-    if (flags[APP_SPECIALIZE]) m.preAppSpecialize(args.app);
-    else if (flags[SERVER_FORK_AND_SPECIALIZE]) m.preServerSpecialize(args.server);
+  for (size_t i = 0; i < zygisk_module_length; i++) {
+    if (flags[APP_SPECIALIZE]) rezygisk_module_call_pre_app_specialize(&zygisk_modules[i], args.app);
+    else if (flags[SERVER_FORK_AND_SPECIALIZE]) rezygisk_module_call_pre_server_specialize(&zygisk_modules[i], args.server);
   }
 }
 
@@ -733,25 +764,29 @@ void ZygiskContext::run_modules_post() {
     flags[POST_SPECIALIZE] = true;
 
     size_t modules_unloaded = 0;
-    for (const auto &m : modules) {
-        if (flags[APP_SPECIALIZE]) m.postAppSpecialize(args.app);
-        else if (flags[SERVER_FORK_AND_SPECIALIZE]) m.postServerSpecialize(args.server);
+    for (size_t i = 0; i < zygisk_module_length; i++) {
+        struct rezygisk_module *m = &zygisk_modules[i];
+
+        if (flags[APP_SPECIALIZE]) rezygisk_module_call_post_app_specialize(m, args.app);
+        else if (flags[SERVER_FORK_AND_SPECIALIZE]) rezygisk_module_call_post_server_specialize(m, args.server);
 
         /* INFO: If module is unloaded by dlclose, there's no need to
                    hide it from soinfo manually. */
-        if (m.tryUnload()) modules_unloaded++;
-        else {
-            bool has_dropped = solist_drop_so_path(m.getEntry(), false);
+        if (m->unload && dlclose(m->handle) == 0) modules_unloaded++;
+        else if (m->unload) {
+            PLOGE("Failed to unload module %zu", i);
+        } else {
+            bool has_dropped = solist_drop_so_path((void *)m->zygisk_module_entry, false);
             if (!has_dropped) continue;
 
-            LOGD("Dropped solist record for %p", m.getEntry());
+            LOGD("Dropped solist record for %p", (void *)m->zygisk_module_entry);
         }
     }
 
-    if (modules.size() > 0) {
-        LOGD("Modules unloaded: %zu/%zu", modules_unloaded, modules.size());
+    if (zygisk_module_length > 0) {
+        LOGD("Modules unloaded: %zu/%zu", modules_unloaded, zygisk_module_length);
 
-        solist_reset_counters(modules.size(), modules_unloaded);
+        solist_reset_counters(zygisk_module_length, modules_unloaded);
 
         LOGD("Returned global counters to their original values");
     }
@@ -773,13 +808,13 @@ void ZygiskContext::app_specialize_pre() {
                and even if so, it should not impact in detections, performance or
                any area.
     */
-    uid_t uid = args.app->uid;
+    uid_t uid = *args.app->uid;
     if (IS_ISOLATED_SERVICE(uid) && args.app->app_data_dir) {
         /* INFO: If the app is an isolated service, we use the UID of the
                    app's process data directory, which is the UID of the
                    app itself, which root implementations actually use.
         */
-        const char *data_dir = env->GetStringUTFChars(args.app->app_data_dir, NULL);
+        const char *data_dir = env->GetStringUTFChars(*args.app->app_data_dir, NULL);
         if (!data_dir) {
             LOGE("Failed to get app data directory");
 
@@ -790,7 +825,7 @@ void ZygiskContext::app_specialize_pre() {
         if (stat(data_dir, &st) == -1) {
             PLOGE("Failed to stat app data directory [%s]", data_dir);
 
-            env->ReleaseStringUTFChars(args.app->app_data_dir, data_dir);
+            env->ReleaseStringUTFChars(*args.app->app_data_dir, data_dir);
 
             return;
         }
@@ -799,7 +834,7 @@ void ZygiskContext::app_specialize_pre() {
 
         LOGD("Isolated service being related to UID %d, app data dir: %s", uid, data_dir);
 
-        env->ReleaseStringUTFChars(args.app->app_data_dir, data_dir);
+        env->ReleaseStringUTFChars(*args.app->app_data_dir, data_dir);
     }
 
     info_flags = rezygiskd_get_process_flags(uid, (const char *const)process);
@@ -869,7 +904,7 @@ void ZygiskContext::app_specialize_post() {
     run_modules_post();
 
     // Cleanups
-    env->ReleaseStringUTFChars(args.app->nice_name, process);
+    env->ReleaseStringUTFChars(*args.app->nice_name, process);
     g_ctx = nullptr;
 }
 
@@ -885,7 +920,7 @@ bool ZygiskContext::exempt_fd(int fd) {
 // -----------------------------------------------------------------
 
 void ZygiskContext::nativeSpecializeAppProcess_pre() {
-    process = env->GetStringUTFChars(args.app->nice_name, nullptr);
+    process = env->GetStringUTFChars(*args.app->nice_name, nullptr);
     LOGV("pre specialize [%s]", process);
     // App specialize does not check FD
     flags[SKIP_FD_SANITIZATION] = true;
@@ -926,7 +961,7 @@ void ZygiskContext::nativeForkSystemServer_post() {
 }
 
 void ZygiskContext::nativeForkAndSpecialize_pre() {
-    process = env->GetStringUTFChars(args.app->nice_name, nullptr);
+    process = env->GetStringUTFChars(*args.app->nice_name, nullptr);
     LOGV("pre forkAndSpecialize [%s]", process);
     flags[APP_FORK_AND_SPECIALIZE] = true;
 
@@ -960,19 +995,22 @@ ZygiskContext::~ZygiskContext() {
 
     // Unhook JNI methods
     for (const auto &[clz, methods] : *jni_hook_list) {
-        if (!methods.empty() && env->RegisterNatives(
-                env->FindClass(clz.data()), methods.data(),
-                static_cast<int>(methods.size())) != 0) {
-            LOGE("Failed to restore JNI hook of class [%s]", clz.data());
-            should_unmap_zygisk = false;
+        jclass jc = env->FindClass(clz.data());
+        if (jc) {
+            if (!methods.empty() && env->RegisterNatives(jc, methods.data(),
+                    static_cast<jint>(methods.size())) != 0) {
+                LOGE("Failed to restore JNI hook of class [%s]", clz.data());
+                should_unmap_zygisk = false;
+            }
+            env->DeleteLocalRef(jc);
         }
     }
     delete jni_hook_list;
     jni_hook_list = nullptr;
 
     // Strip out all API function pointers
-    for (auto &m : modules) {
-        m.clearApi();
+    for (size_t i = 0; i < zygisk_module_length; i++) {
+        memset(&zygisk_modules[i], 0, sizeof(zygisk_modules[i]));
     }
 
     enable_unloader = true;
