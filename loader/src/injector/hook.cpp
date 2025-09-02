@@ -456,6 +456,8 @@ void initialize_jni_hook() {
 // -----------------------------------------------------------------
 
 bool rezygisk_module_register(struct rezygisk_api *api, struct rezygisk_abi *module) {
+    LOGD("Registering module with API version %ld", module->api_version);
+
     if (api == nullptr || module == nullptr)
         return false;
 
@@ -469,6 +471,8 @@ bool rezygisk_module_register(struct rezygisk_api *api, struct rezygisk_abi *mod
     api->hook_jni_native_methods = hookJniNativeMethods;
     if (module->api_version >= 4) {
         api->plt_hook_register_v4 = [](dev_t dev, ino_t inode, const char *symbol, void *fn, void **backup) {
+            LOGD("plt_hook_register_v4 called for dev=%lu, inode=%lu, symbol=%s, fn=%p, backup=%p",
+                 (unsigned long)dev, (unsigned long)inode, symbol, fn, backup);
             if (dev == 0 || inode == 0 || symbol == NULL || fn == NULL) {
                 LOGE("Invalid arguments to plt_hook_register");
 
@@ -478,9 +482,11 @@ bool rezygisk_module_register(struct rezygisk_api *api, struct rezygisk_abi *mod
             lsplt_register_hook(dev, inode, symbol, fn, backup);
         };
         api->exempt_fd = [](int fd) {
+            LOGD("exempt_fd called for fd=%d", fd);
             if (g_ctx) g_ctx->exempt_fd(fd);
         };
         api->plt_hook_commit = []() {
+            LOGD("plt_hook_commit called");
             return lsplt_commit_hook();
         };
     } else {
@@ -495,6 +501,7 @@ bool rezygisk_module_register(struct rezygisk_api *api, struct rezygisk_abi *mod
         };
     }
     api->connect_companion = [](void *id) {
+        LOGD("connect_companion called for id=%p", id);
         if ((size_t)id >= zygisk_module_length) {
             LOGE("Invalid module id %zu", (size_t)id);
 
@@ -505,6 +512,8 @@ bool rezygisk_module_register(struct rezygisk_api *api, struct rezygisk_abi *mod
     };
     api->set_option = [](void *id, enum rezygisk_options opt) {
         if (!g_ctx) return;
+
+        LOGD("set_option called for id=%p, opt=%d", id, opt);
 
         if ((size_t)id >= zygisk_module_length) {
             LOGE("Invalid module id %zu", (size_t)id);
@@ -528,6 +537,7 @@ bool rezygisk_module_register(struct rezygisk_api *api, struct rezygisk_abi *mod
     };
     if (module->api_version >= 2) {
         api->get_module_dir = [](void *id) {
+            LOGD("get_module_dir called for id=%p", id);
             if ((size_t)id >= zygisk_module_length) {
                 LOGE("Invalid module id %zu", (size_t)id);
 
@@ -537,6 +547,7 @@ bool rezygisk_module_register(struct rezygisk_api *api, struct rezygisk_abi *mod
             return rezygiskd_get_module_dir((size_t)id);
         };
         api->get_flags = []() {
+            LOGD("get_flags called");
             return g_ctx ? (g_ctx->info_flags & ~PRIVATE_MASK) : 0;
         };
     }
@@ -772,11 +783,13 @@ bool ZygiskContext::load_modules_only() {
       continue;
     }
 
+    zygisk_modules[zygisk_module_length].api.register_module = rezygisk_module_register;
+    zygisk_modules[zygisk_module_length].api.impl = (void *)zygisk_module_length;
+
     zygisk_modules[zygisk_module_length].handle = handle;
     zygisk_modules[zygisk_module_length].zygisk_module_entry = (void (*)(void *, void *))entry;
 
-    zygisk_modules[zygisk_module_length].api.register_module = rezygisk_module_register;
-    zygisk_modules[zygisk_module_length].api.impl = (void *)zygisk_module_length;
+    zygisk_modules[zygisk_module_length].unload = false;
 
     zygisk_module_length++;
 
