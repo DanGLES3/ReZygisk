@@ -660,14 +660,7 @@ bool umount_root(struct root_impl impl) {
     struct mountinfo mount = mounts.mounts[i];
 
     bool should_unmount = false;
-    /* INFO: The root implementations have their own /system mounts, so we
-                only skip the mount if they are from a module, not Magisk itself.
-    */
-    if (strncmp(mount.target, "/system/", strlen("/system/")) == 0 &&
-        strncmp(mount.root, "/adb/modules/", strlen("/adb/modules/")) == 0 &&
-        strncmp(mount.target, "/system/etc/", strlen("/system/etc/")) != 0) continue;
-
-    if (strcmp(mount.source, source_name) == 0) should_unmount = true;
+    if (strcmp(mount.source, source_name) == 0 || (impl.impl == Magisk && strcmp(mount.source, "worker"))) should_unmount = true;
     if (strncmp(mount.target, "/data/adb/modules", strlen("/data/adb/modules")) == 0) should_unmount = true;
     if (strncmp(mount.root, "/adb/modules/", strlen("/adb/modules/")) == 0) should_unmount = true;
 
