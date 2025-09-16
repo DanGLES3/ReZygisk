@@ -231,9 +231,15 @@ bool get_regs(int pid, struct user_regs_struct *regs) {
     };
 
     if (ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &iov) == -1) {
-      PLOGE("getregs");
+      PLOGE("GETREGSET failed, trying GETREGS");
 
-      return false;
+      if (ptrace(/* PTRACE_GETREGS */ 12, pid, 0, regs) == -1) {
+        PLOGE("GETREGS");
+
+        return false;
+      }
+
+      return true;
     }
   #endif
 
@@ -254,9 +260,15 @@ bool set_regs(int pid, struct user_regs_struct *regs) {
     };
 
     if (ptrace(PTRACE_SETREGSET, pid, NT_PRSTATUS, &iov) == -1) {
-      PLOGE("setregs");
+      PLOGE("SETREGSET failed, trying SETREGS");
 
-      return false;
+      if (ptrace(/* PTRACE_SETREGS */ 13, pid, 0, regs) == -1) {
+        PLOGE("SETREGS");
+
+        return false;
+      }
+
+      return true;
     }
   #endif
 

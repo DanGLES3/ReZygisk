@@ -8,7 +8,7 @@ body:
     id: version
     attributes:
       label: Version
-      description: The version of the ReZygisk you're using.
+      description: "The version of the ReZygisk you're using. You must include the commit hash if non-release. Example: 1.2.3 (abcd1234)"
     validations:
       required: true
 
@@ -16,7 +16,7 @@ body:
     id: modules
     attributes:
       label: Modules
-      description: "The modules you're using following the format: moduleName by authorName version x.x.x"
+      description: "The modules you're using following the format: moduleName by authorName version x.x.x, available at URL. One module per line."
     validations:
       required: true
 
@@ -36,14 +36,6 @@ body:
     validations:
       required: true
 
-  - type: textarea
-    id: logs
-    attributes:
-      label: Logs
-      description: If applicable, add logs AS A FILE to help solve the issue. Most of the time it will be from logcat on boot.
-    validations:
-      required: false
-
   - type: checkboxes
     id: terms
     attributes:
@@ -53,6 +45,8 @@ body:
         - label: My environment meets the minimum requirements.
           required: true
         - label: I have verified that this is not a duplicate issue.
+          required: true
+        - label: I have sent the logs, privately, to one of the project maintainers, using the Debug Assistant module.
           required: true
 
   - type: checkboxes

@@ -33,6 +33,8 @@ static bool seccomp_filters_visible() {
 
 void send_seccomp_event() {
     if (seccomp_filters_visible()) {
+        LOGD("Seccomp filters are visible, skipping using hiding via seccomp event");
+
         return;
     }
 

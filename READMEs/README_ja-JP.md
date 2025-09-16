@@ -50,7 +50,7 @@ ReZygiskの安定性や匿名性のためには、ビルドファイル/Zipフ�
 ### 3. インストールを確認
 
 再起動後、ルートマネージャーの`Modules`セクションをチェックすることによりReZygiskが正常に動いているかどうか確認できます。
-説明欄は、必要なデーモンが動作していることを示しているはずです。例えば、あなたの端末が64bitと32bitの両方をサポートしている場合、右記のように見えるはずです: `[monitor: 😋 tracing, zygote64: 😋 injected, daemon64: 😋 running (...) zygote32: 😋 injected, daemon32: 😋 running (...)] Standalone implementation of Zygisk.`
+説明欄は、必要なデーモンが動作していることを示しているはずです。例えば、あなたの端末が64bitと32bitの両方をサポートしている場合、右記のように見えるはずです: `[Monitor: ✅, ReZygisk 64-bit: ✅, ReZygisk 32-bit: ✅] Standalone implementation of Zygisk.`
 
 ## 翻訳
 

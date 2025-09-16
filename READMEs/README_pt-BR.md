@@ -48,7 +48,7 @@ Depois de "flashar", confira os logs de instalação para garantir que não houv
 
 ### 3. Verificando a instalação
 
-Depois de reiniciar, você pode verificar se o ReZygisk está funcionando corretamente indo na seção `Módulos` do seu gerenciador de root. A descrição deve indicar que os daemons necessários estão rodando. Por exemplo, se seu ambiente suporta tanto 64-bit quanto 32-bit, deve estar parecido com isso: `[monitor: 😋 tracing, zygote64: 😋 injected, daemon64: 😋 running (...) zygote32: 😋 injected, daemon32: 😋 running (...)] Standalone implementation of Zygisk.`
+Depois de reiniciar, você pode verificar se o ReZygisk está funcionando corretamente indo na seção `Módulos` do seu gerenciador de root. A descrição deve indicar que os daemons necessários estão rodando. Por exemplo, se seu ambiente suporta tanto 64-bit quanto 32-bit, deve estar parecido com isso: `[Monitor: ✅, ReZygisk 64-bit: ✅, ReZygisk 32-bit: ✅] Standalone implementation of Zygisk.`
 
 ## Tradução
 

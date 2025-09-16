@@ -52,7 +52,7 @@ Après le flash, vérifiez les journaux d'installation pour vous assurer qu'il n
  
 ### 3. Vérifiez l'installation
 
-Après le redémarrage, vous ne pouvez pas vérifier si ReZygisk fonctionne normalement en vérifiant la description du moudles dans la section `Modules` de votre gestionnaire root. La description doit indiquer que les processus en arrière plan nécessaire sont en cours d'exécution. Par exemple, si votre environnement prend en charge à la fois le 64 bits et le 32 bits, cela devrait ressembler à ceci :`[monitor: 😋 tracing, zygote64: 😋 injected, daemon64: 😋 running (...) zygote32: 😋 injected, daemon32: 😋 running (...)] Standalone implementation of Zygisk.`
+Après le redémarrage, vous ne pouvez pas vérifier si ReZygisk fonctionne normalement en vérifiant la description du moudles dans la section `Modules` de votre gestionnaire root. La description doit indiquer que les processus en arrière plan nécessaire sont en cours d'exécution. Par exemple, si votre environnement prend en charge à la fois le 64 bits et le 32 bits, cela devrait ressembler à ceci :`[Monitor: ✅, ReZygisk 64-bit: ✅, ReZygisk 32-bit: ✅] Standalone implementation of Zygisk.`
 
 
 ## Traduction
