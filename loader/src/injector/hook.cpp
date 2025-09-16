@@ -324,7 +324,7 @@ DCL_HOOK_FUNC(FILE *, setmntent, const char *filename, int type) {
     waitpid(cpid, NULL, 0);
     LOGD("setmntent called in child process %d", cpid);
 
-    update_mnt_ns(Clean, false, false);
+    update_mnt_ns(Mounted, false, false);
 
     return old_setmntent(filename, type);
 }
