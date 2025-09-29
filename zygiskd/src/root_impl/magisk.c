@@ -150,7 +150,7 @@ bool magisk_uid_should_umount(const char *const process) {
   }
 
   if (is_using_sulist) return result[0] == '\0';
-  else return result[0] != '\0';
+  else return result[0] == '\0';
 }
 
 bool magisk_uid_is_manager(uid_t uid) {
