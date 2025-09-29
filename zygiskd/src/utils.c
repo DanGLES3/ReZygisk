@@ -838,7 +838,7 @@ int save_mns_fd(int pid, enum MountNamespaceState mns_state, bool force_update, 
     if (boot_completed[0] == '1') {
       LOGI("[Magisk] Appropriate mns found, caching clean namespace fd.");
 
-      sleep(3); 
+      sleep(15); 
       
       clean_namespace_fd = ns_fd;
     }
