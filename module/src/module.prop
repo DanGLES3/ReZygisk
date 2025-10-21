@@ -4,3 +4,4 @@ version=${versionName}
 versionCode=${versionCode}
 author=The PerformanC Organization
 description=Standalone implementation of Zygisk.
+updateJson=https://raw.githubusercontent.com/ThePedroo/RemoteFiles/refs/heads/main/ReZygisk/update.json
