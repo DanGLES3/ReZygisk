@@ -1115,15 +1115,28 @@ void hook_functions() {
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, setmntent);
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, endmntent);
     PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, _ZNK18FileDescriptorInfo14ReopenOrDetachERKNSt3__18functionIFvNS0_12basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEEEEE);
-    hook_commit(map_infos);
+
+    /* INFO: Fallback to older symbol for ReopenOrDetach */
+    if (!hook_commit(map_infos)) {
+        LOGW("Failed to hook. Trying older symbol for ReopenOrDetach");
+
+        plt_hook_list->clear();
+
+        PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, fork);
+        PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, strdup);
+        PLT_HOOK_REGISTER(android_runtime_dev, android_runtime_inode, property_get);
+        PLT_HOOK_REGISTER_SYM(android_runtime_dev, android_runtime_inode,
+                              "_ZNK18FileDescriptorInfo14ReopenOrDetachEPNSt3__112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEE",
+                              _ZNK18FileDescriptorInfo14ReopenOrDetachERKNSt3__18functionIFvNS0_12basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEEEEE);
+
+        if (!hook_commit(map_infos)) {
+            LOGE("All methods of hooking failed");
+
+            plt_hook_list->clear();
+        }
+    }
 
     lsplt_free_maps(map_infos);
-
-    // Remove unhooked methods
-    plt_hook_list->erase(
-            std::remove_if(plt_hook_list->begin(), plt_hook_list->end(),
-                           [](auto &t) { return *std::get<3>(t) == nullptr;}),
-            plt_hook_list->end());
 }
 
 static void hook_unloader() {
