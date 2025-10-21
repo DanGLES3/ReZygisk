@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <dlfcn.h>
+#include <sys/mman.h>
 
 #include <linux/limits.h>
 
@@ -12,27 +13,47 @@
 
 /* TODO: Is offset for realpath necessary? It seems to have the function
            available anywhere. */
+
+/* INFO: Those are useless. Heuristics should work fine and replace them, but it should
+           be the same. In case of the unlikely event of heuristics failing, those might
+           make it not be completely broken.
+
+         They are generated from Android 15 linker source, in a self contained standalone
+           code to ensure they are correct, considering alignment and padding.
+*/
 #ifdef __LP64__
+  size_t solist_base_offset = 0x10;
   size_t solist_size_offset = 0x18;
-  size_t solist_realpath_offset = 0x1a8;
+
+  size_t solist_fini_array_offset = 0xa8;
+  size_t solist_fini_array_size_offset = 0xb0;
+  size_t solist_fini_offset = 0xc0;
+
+  size_t solist_version_offset = 0x10c;
+  size_t solist_gap_start_offset = 0x248;
+  size_t solist_gap_size_offset = 0x250;
 #else
-  size_t solist_size_offset = 0x90;
-  size_t solist_realpath_offset = 0x174;
+  size_t solist_base_offset = 0x8;
+  size_t solist_size_offset = 0xc;
+
+  size_t solist_fini_array_offset = 0x58;
+  size_t solist_fini_array_size_offset = 0x5c;
+  size_t solist_fini_offset = 0x64;
+
+  size_t solist_version_offset = 0x94;
+  size_t solist_gap_start_offset = 0x140;
+  size_t solist_gap_size_offset = 0x144;
 #endif
 
-size_t solist_fini_array_size_offset = 0x0;
-size_t solist_fini_offset = 0x0;
+bool base_size_found = false;
+bool fini_version_gap_found = false;
 
-static const char *(*get_realpath_sym)(SoInfo *) = NULL;
-static void (*soinfo_unload)(SoInfo *) = NULL;
-static SoInfo *(*find_containing_library)(const void *p) = NULL;
-struct link_map *r_debug_tail = NULL;
+static const char *(*get_realpath)(SoInfo *) = NULL;
+static SoInfo *(*find_containing_library)(const void *) = NULL;
+static struct link_map *r_debug_tail = NULL;
 
 static inline const char *get_path(SoInfo *self) {
-  if (get_realpath_sym)
-    return (*get_realpath_sym)(self);
-
-  return ((const char *)((uintptr_t)self + solist_realpath_offset));
+  return (*get_realpath)(self);
 }
 
 static inline void set_size(SoInfo *self, size_t size) {
@@ -103,23 +124,14 @@ static bool solist_init() {
 
   LOGD("%p is somain", (void *)somain);
 
-  get_realpath_sym = (const char *(*)(SoInfo *))getSymbAddress(linker, "__dl__ZNK6soinfo12get_realpathEv");
-  if (get_realpath_sym == NULL) {
+  get_realpath = (const char *(*)(SoInfo *))getSymbAddress(linker, "__dl__ZNK6soinfo12get_realpathEv");
+  if (get_realpath == NULL) {
     LOGE("Failed to find get_realpath __dl__ZNK6soinfo12get_realpathEv");
 
     goto solist_init_error;
   }
 
-  LOGD("%p is get_realpath", (void *)get_realpath_sym);
-
-  soinfo_unload = (void (*)(SoInfo *))getSymbAddressByPrefix(linker, "__dl__ZL13soinfo_unloadP6soinfo");
-  if (soinfo_unload == NULL) {
-    LOGE("Failed to find soinfo_unload __dl__ZL13soinfo_unloadP6soinfo*");
-
-    goto solist_init_error;
-  }
-
-  LOGD("%p is soinfo_unload", (void *)soinfo_unload);
+  LOGD("%p is get_realpath", (void *)get_realpath);
 
   find_containing_library = (SoInfo *(*)(const void *))getSymbAddress(linker, "__dl__Z23find_containing_libraryPKv");
   if (find_containing_library == NULL) {
@@ -136,6 +148,8 @@ static bool solist_init() {
 
     goto solist_init_error;
   }
+
+  LOGD("%p is r_debug_tail", (void *)r_debug_tail);
 
   SoInfo *solinker = (SoInfo *)getSymbValueByPrefix(linker, "__dl__ZL8solinker");
   if (solinker == NULL) {
@@ -166,23 +180,28 @@ static bool solist_init() {
   for (size_t i = 0; i < 1024 / sizeof(void *); i++) {
     size_t possible_size_of_somain = *(size_t *)((uintptr_t)somain + i * sizeof(void *));
 
-    if (solist_size_offset == 0 && possible_size_of_somain < 0x100000 && possible_size_of_somain > 0x100) {
+    if (!base_size_found && possible_size_of_somain < 0x100000 && possible_size_of_somain > 0x100) {
+      solist_base_offset = (i - 1) * sizeof(void *);
       solist_size_offset = i * sizeof(void *);
 
+      LOGD("solist_base_offset is %zu * %zu = %p", (i - 1), sizeof(void *), (void *)solist_base_offset);
       LOGD("solist_size_offset is %zu * %zu = %p", i, sizeof(void *), (void *)solist_size_offset);
+
+      base_size_found = true;
     }
 
     struct link_map *possible_link_map_head = (struct link_map *)((uintptr_t)solinker + i * sizeof(void *));
-    if (possible_link_map_head->l_name == solinker_map->l_name) {
-
+    if (!fini_version_gap_found && possible_link_map_head->l_name == solinker_map->l_name) {
       #ifdef __arm__
         /* INFO: For arm32, ARM_exidx and ARM_exidx_count is defined between them. */
+        solist_fini_array_offset = (i - 7) * sizeof(void *);
         solist_fini_array_size_offset = (i - 6) * sizeof(void *);
         solist_fini_offset = (i - 5) * sizeof(void *);
 
         LOGD("solist_fini_array_size_offset is %zu * %zu = %p", (i - 6), sizeof(void *), (void *)solist_fini_array_size_offset);
         LOGD("solist_fini_offset is %zu * %zu = %p", (i - 4), sizeof(void *), (void *)solist_fini_offset);
       #else
+        solist_fini_array_offset = (i - 5) * sizeof(void *);
         solist_fini_array_size_offset = (i - 4) * sizeof(void *);
         solist_fini_offset = (i - 2) * sizeof(void *);
 
@@ -190,7 +209,28 @@ static bool solist_init() {
         LOGD("solist_fini_offset is %zu * %zu = %p", (i - 2), sizeof(void *), (void *)solist_fini_offset);
       #endif
 
-      break;
+      /* INFO: Offsets are hardcoded. They will not change. They have been retrieved through the same
+                 ways as the ones in the top of the file.
+      */
+      #ifndef __LP64__
+        solist_version_offset = (i * sizeof(void *)) + 0x20;
+        solist_gap_start_offset = solist_version_offset + 0xAC;
+        solist_gap_size_offset = solist_gap_start_offset + sizeof(ElfW(Addr));
+
+        LOGD("solist_version_offset is %zu * %zu + 0x20 = %p", i, sizeof(void *), (void *)solist_version_offset);
+        LOGD("solist_gap_start_offset is %zu + 0xAC = %p", solist_version_offset, (void *)solist_gap_start_offset);
+        LOGD("solist_gap_size_offset is %zu + %zu = %p", solist_gap_start_offset, sizeof(ElfW(Addr)), (void *)solist_gap_size_offset);
+      #else
+        solist_version_offset = (i * sizeof(void *)) + 0x3C;
+        solist_gap_start_offset = solist_version_offset + 0x13C;
+        solist_gap_size_offset = solist_gap_start_offset + sizeof(ElfW(Addr));
+
+        LOGD("solist_version_offset is %zu * %zu + 0x3C = %p", i, sizeof(void *), (void *)solist_version_offset);
+        LOGD("solist_gap_start_offset is %zu + 0x13C = %p", solist_version_offset, (void *)solist_gap_start_offset);
+        LOGD("solist_gap_size_offset is %zu + %zu = %p", solist_gap_start_offset, sizeof(ElfW(Addr)), (void *)solist_gap_size_offset);
+      #endif
+
+      fini_version_gap_found = true;
     }
   }
 
@@ -273,23 +313,7 @@ bool solist_drop_so_path(void *lib_memory, bool unload) {
              calling deconstructors might break them. To avoid that, we manually call
              the separated structures, that however won't clean all traces in soinfo,
              not for now, at least. */
-  if (unload && dlclose((void *)found) == -1) {
-    LOGE("Failed to dlclose so path for %s: %s", path, dlerror());
-
-    return false;
-  } else if (!unload) {
-    LOGD("Not unloading so path for %s, only dropping it", path);
-
-    /* 
-       INFO: If the link map is not removed from the list, it gets inconsistent, resulting
-               in a loop when listing through it, which can be detected. To fix that, we
-               can remove the map, like expected.
-
-             We cannot use the notify_gdb_of_unload function as it is static, and not available
-               in all linker binaries.
-    */
-    /* INFO: unregister_soinfo_tls cannot be used since module might use JNI which may
-               require TLS, so we cannot remove it. */
+  if (!unload) {
     size_t tmp_fini_array_size = *(size_t *)((uintptr_t)found + solist_fini_array_size_offset);
     void **tmp_fini_array = *(void ***)((uintptr_t)found + solist_fini_offset);
 
@@ -298,9 +322,13 @@ bool solist_drop_so_path(void *lib_memory, bool unload) {
     *(size_t *)((uintptr_t)found + solist_fini_array_size_offset) = 0;
     *(void ***)((uintptr_t)found + solist_fini_offset) = NULL;
 
-    soinfo_unload(found);
-
     pdg_protect();
+  }
+
+  if (dlclose((void *)found) == -1) {
+    LOGE("Failed to dlclose so path for %s: %s", path, dlerror());
+
+    return false;
   }
 
   LOGD("Successfully hidden soinfo traces for %s", path);
@@ -338,4 +366,105 @@ void solist_reset_counters(size_t load, size_t unload) {
 
     LOGD("reset g_module_unload_counter to %zu", *g_module_unload_counter);
   }
+}
+
+void solist_unload_lib(struct soinfo_gap *gap, void *base, size_t size) {
+  if (munmap(base, size) == -1) {
+    PLOGE("Failed to unmap library from %p (size %zu)", base, size);
+  }
+
+  if (gap->size) {
+    if (munmap(gap->start, gap->size) == -1) {
+      PLOGE("Failed to unmap gap from %p (size %zu)", gap->start, gap->size);
+    }
+  }
+}
+
+ssize_t solist_get_size(void *lib_memory) {
+  if (somain == NULL && !solist_init()) {
+    LOGE("Failed to initialize solist");
+
+    return -1;
+  }
+
+  SoInfo *found = (*find_containing_library)(lib_memory);
+  if (found == NULL) {
+    LOGD("Could not find containing library for %p", lib_memory);
+
+    return -1;
+  }
+
+  LOGD("Size of %p is %zu", lib_memory, *(size_t *)((uintptr_t)found + solist_size_offset));
+
+  return *(size_t *)((uintptr_t)found + solist_size_offset);
+}
+
+void *solist_get_base(void *lib_memory) {
+  if (somain == NULL && !solist_init()) {
+    LOGE("Failed to initialize solist");
+
+    return NULL;
+  }
+
+  SoInfo *found = (*find_containing_library)(lib_memory);
+  if (found == NULL) {
+    LOGD("Could not find containing library for %p", lib_memory);
+
+    return NULL;
+  }
+
+  return (void *)*(uintptr_t *)((uintptr_t)found + solist_base_offset);
+}
+
+struct soinfo_deconstructor solist_get_deconstructors(void *lib_memory) {
+  struct soinfo_deconstructor result = { 0 };
+
+  if (somain == NULL && !solist_init()) {
+    LOGE("Failed to initialize solist");
+
+    return result;
+  }
+
+  SoInfo *found = (*find_containing_library)(lib_memory);
+  if (found == NULL) {
+    LOGD("Could not find containing library for %p", lib_memory);
+
+    return result;
+  }
+
+  result.fini_array_size = *(size_t *)((uintptr_t)found + solist_fini_array_size_offset);
+  result.fini_array = *(void (***)())((uintptr_t)found + solist_fini_array_offset);
+  result.fini_func = *(void (**)())((uintptr_t)found + solist_fini_offset);
+
+  return result;
+}
+
+struct soinfo_gap solist_get_gap_info(void *lib_memory) {
+  struct soinfo_gap result = { 0 };
+
+  if (somain == NULL && !solist_init()) {
+    LOGE("Failed to initialize solist");
+
+    return result;
+  }
+
+  SoInfo *found = (*find_containing_library)(lib_memory);
+  if (found == NULL) {
+    LOGD("Could not find containing library for %p", lib_memory);
+
+    return result;
+  }
+
+  if (*(uint32_t *)((uintptr_t)found + solist_version_offset) < 6) {
+    LOGD("soinfo for %p has no gap info (version %d)",
+         lib_memory,
+         *(uint32_t *)((uintptr_t)found + solist_version_offset));
+
+    return result;
+  }
+
+  result.start = *(void **)((uintptr_t)found + solist_gap_start_offset);
+  result.size = *(size_t *)((uintptr_t)found + solist_gap_size_offset);
+
+  return result;
 }

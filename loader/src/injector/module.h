@@ -2,6 +2,7 @@
 #define MODULE_H
 
 #include "logging.h"
+#include "solist.h"
 
 #define REZYGISK_API_VERSION 5
 
@@ -147,6 +148,12 @@ struct rezygisk_module {
 
   void *handle;
   void (*zygisk_module_entry)(void *, void *);
+
+  void *base;
+  size_t size;
+
+  struct soinfo_deconstructor deconstructors;
+  struct soinfo_gap gap;
 
   bool unload;
 };
