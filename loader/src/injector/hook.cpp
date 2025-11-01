@@ -778,18 +778,15 @@ bool load_modules_only() {
     zygisk_modules[zygisk_module_length].size = solist_get_size(entry);
 
     zygisk_modules[zygisk_module_length].deconstructors = solist_get_deconstructors(entry);
-    zygisk_modules[zygisk_module_length].gap = solist_get_gap_info(entry);
 
-    LOGD("Loaded module [%s]. Entry: %p, Base: %p, Size: %zu, Deconstructors: fini_func=%p, fini_array=%p (size: %zu), Gap: %p (size: %zu)",
+    LOGD("Loaded module [%s]. Entry: %p, Base: %p, Size: %zu, Deconstructors: fini_func=%p, fini_array=%p (size: %zu)",
          lib_path,
          entry,
          zygisk_modules[zygisk_module_length].base,
          zygisk_modules[zygisk_module_length].size,
          zygisk_modules[zygisk_module_length].deconstructors.fini_func,
          zygisk_modules[zygisk_module_length].deconstructors.fini_array,
-         zygisk_modules[zygisk_module_length].deconstructors.fini_array_size,
-         zygisk_modules[zygisk_module_length].gap.start,
-         zygisk_modules[zygisk_module_length].gap.size);
+         zygisk_modules[zygisk_module_length].deconstructors.fini_array_size);
 
     zygisk_modules[zygisk_module_length].unload = false;
 
@@ -828,24 +825,28 @@ void ZygiskContext::run_modules_post() {
 
         /* INFO: If module is unloaded by dlclose, there's no need to
                    hide it from soinfo manually. */
-        if (m->unload) {
-            /* INFO: Deconstructors are called in the inverted order, and following fini array then fini
-                       function order. It must not change. */
-            for (size_t j = m->deconstructors.fini_array_size; j > 0; j--) {
-                void (*destructor)(void) = m->deconstructors.fini_array[j - 1];
-                if (destructor) {
-                    LOGD("Calling destructor %p for module %p", (void *)destructor, (void *)m->zygisk_module_entry);
+        if (!m->unload) continue;
 
-                    destructor();
-                }
+        /* INFO: Deconstructors are called in the inverted order, and following fini array then fini
+                    function order. It must not change. */
+        for (size_t j = m->deconstructors.fini_array_size; j > 0; j--) {
+            void (*destructor)(void) = m->deconstructors.fini_array[j - 1];
+            if (destructor) {
+                LOGD("Calling destructor %p for module %p", (void *)destructor, (void *)m->zygisk_module_entry);
+
+                destructor();
             }
-
-            if (m->deconstructors.fini_func) m->deconstructors.fini_func();
-
-            solist_unload_lib(&m->gap, m->base, m->size);
-
-            modules_unloaded++;
         }
+
+        if (m->deconstructors.fini_func) m->deconstructors.fini_func();
+
+        if (munmap(m->base, m->size) == -1) {
+            PLOGE("Failed to unmap module library at %p with size %zu", m->base, m->size);
+
+            continue;
+        }
+
+        modules_unloaded++;
     }
 
     if (zygisk_module_length > 0)
